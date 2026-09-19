@@ -67,10 +67,12 @@ if ! tr -d '\r' < "$scratch/META-INF/services/com.juanmuscaria.relauncher.Comman
     exit 1
 fi
 
-if ! javap -verbose -classpath "$artifact" \
+bytecode="$scratch/bytecode.txt"
+javap -verbose -classpath "$artifact" \
     io.github.thorfusion.solderpyloader.SolderPyAgent |
-    tr -d '\r' |
-    grep -Eq 'major version: 52$'; then
+    tr -d '\r' > "$bytecode"
+
+if ! grep -Eq 'major version: 52$' "$bytecode"; then
     echo 'The loader must target Java 8 bytecode (class major version 52).' >&2
     exit 1
 fi
