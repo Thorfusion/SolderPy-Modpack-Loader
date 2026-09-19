@@ -13,6 +13,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
+import javax.swing.Scrollable;
 import javax.swing.JTextArea;
 import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
@@ -24,6 +25,7 @@ import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Frame;
 import java.awt.GraphicsEnvironment;
+import java.awt.Rectangle;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.lang.reflect.InvocationTargetException;
@@ -157,7 +159,7 @@ final class OptionalSelectionScreen {
         heading.add(note);
         root.add(heading, BorderLayout.NORTH);
 
-        JPanel choices = new JPanel();
+        JPanel choices = new ChoiceListPanel();
         choices.setLayout(new BoxLayout(choices, BoxLayout.Y_AXIS));
         if ("advanced".equals(manifest.optionalMode.name)) {
             addAdvancedGroups(choices);
@@ -166,6 +168,8 @@ final class OptionalSelectionScreen {
 
         JScrollPane scroll = new JScrollPane(choices);
         scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         scroll.setPreferredSize(new Dimension(680, 440));
         root.add(scroll, BorderLayout.CENTER);
@@ -188,9 +192,25 @@ final class OptionalSelectionScreen {
 
         dialog.setContentPane(root);
         dialog.pack();
-        dialog.setMinimumSize(new Dimension(560, 360));
-        dialog.setLocationRelativeTo(null);
+        fitToUsableScreen(dialog);
         dialog.setVisible(true);
+    }
+
+    private static void fitToUsableScreen(JDialog dialog) {
+        Rectangle usable = GraphicsEnvironment.getLocalGraphicsEnvironment()
+            .getMaximumWindowBounds();
+        int maximumWidth = Math.max(1, usable.width - 32);
+        int maximumHeight = Math.max(1, usable.height - 32);
+        int minimumWidth = Math.min(560, maximumWidth);
+        int minimumHeight = Math.min(360, maximumHeight);
+        int width = Math.min(Math.max(dialog.getWidth(), minimumWidth), maximumWidth);
+        int height = Math.min(Math.max(dialog.getHeight(), minimumHeight), maximumHeight);
+
+        dialog.setMinimumSize(new Dimension(minimumWidth, minimumHeight));
+        dialog.setSize(width, height);
+        dialog.setLocation(
+            usable.x + Math.max(0, (usable.width - width) / 2),
+            usable.y + Math.max(0, (usable.height - height) / 2));
     }
 
     private void addAdvancedGroups(JPanel choices) {
@@ -366,6 +386,37 @@ final class OptionalSelectionScreen {
         private ChoiceControl(long membershipId, AbstractButton button) {
             this.membershipId = membershipId;
             this.button = button;
+        }
+    }
+
+    private static final class ChoiceListPanel extends JPanel implements Scrollable {
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(
+            Rectangle visibleRectangle, int orientation, int direction) {
+
+            return 24;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(
+            Rectangle visibleRectangle, int orientation, int direction) {
+
+            return Math.max(24, visibleRectangle.height - 24);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
         }
     }
 }

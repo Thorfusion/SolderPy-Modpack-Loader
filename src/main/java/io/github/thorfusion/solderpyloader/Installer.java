@@ -19,6 +19,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -28,17 +35,33 @@ final class Installer {
     private final Path loaderJar;
     private final DownloadManager downloads;
     private final SafeZipExtractor zipExtractor;
+    private final int concurrentDownloads;
+    private final int concurrentExtractions;
+    private final BootstrapProgress progress;
 
     Installer(Path gameDirectory, Path dataDirectory, LoaderConfig.Limits limits) {
-        this(gameDirectory, dataDirectory, limits, null);
+        this(gameDirectory, dataDirectory, limits, null, BootstrapProgress.console());
     }
 
     Installer(Path gameDirectory, Path dataDirectory, LoaderConfig.Limits limits, Path loaderJar) {
+        this(gameDirectory, dataDirectory, limits, loaderJar, BootstrapProgress.console());
+    }
+
+    Installer(
+        Path gameDirectory,
+        Path dataDirectory,
+        LoaderConfig.Limits limits,
+        Path loaderJar,
+        BootstrapProgress progress) {
+
         this.gameDirectory = gameDirectory.toAbsolutePath().normalize();
         this.dataDirectory = dataDirectory.toAbsolutePath().normalize();
         this.loaderJar = loaderJar == null ? null : loaderJar.toAbsolutePath().normalize();
         this.downloads = new DownloadManager(limits.maxDownloadBytes);
         this.zipExtractor = new SafeZipExtractor(limits.maxExpandedBytes, limits.maxArchiveEntries);
+        this.concurrentDownloads = limits.maxConcurrentDownloads;
+        this.concurrentExtractions = limits.maxConcurrentExtractions;
+        this.progress = progress;
     }
 
     boolean isInstalledStateIntact(
@@ -63,6 +86,7 @@ final class Installer {
         Path transaction = dataDirectory.resolve("staging-" + UUID.randomUUID().toString());
         Path content = transaction.resolve("content");
         Path downloadDirectory = transaction.resolve("downloads");
+        Path packagesDirectory = transaction.resolve("packages");
         Path backup = transaction.resolve("backup");
         try {
             Files.createDirectories(content);
@@ -71,15 +95,39 @@ final class Installer {
             Set<String> stagedPaths = new LinkedHashSet<String>();
             Map<String, InstalledState.Receipt> receipts =
                 new LinkedHashMap<String, InstalledState.Receipt>();
+            Set<String> reusablePackages = new LinkedHashSet<String>();
+            List<BootstrapManifest.Package> pendingDownloads =
+                new ArrayList<BootstrapManifest.Package>();
 
             for (BootstrapManifest.Package item : selected) {
                 InstalledState.Receipt oldReceipt = previous.receipts.get(item.name);
-                boolean reusable = isReusable(item, oldReceipt);
+                if (isReusable(item, oldReceipt)) {
+                    reusablePackages.add(item.name);
+                } else {
+                    pendingDownloads.add(item);
+                }
+            }
+
+            Map<String, DownloadManager.DownloadedFile> downloaded =
+                downloadAll(pendingDownloads, downloadDirectory);
+            Map<String, StagedPackage> stagedPackages =
+                stageAll(pendingDownloads, downloaded, packagesDirectory);
+            if (!pendingDownloads.isEmpty()) {
+                progress.phase("Checking package ownership...");
+            }
+
+            for (BootstrapManifest.Package item : selected) {
+                InstalledState.Receipt oldReceipt = previous.receipts.get(item.name);
+                boolean reusable = reusablePackages.contains(item.name);
                 List<String> files;
                 if (reusable) {
                     files = new ArrayList<String>(oldReceipt.files);
                 } else {
-                    files = stage(item, content, downloadDirectory);
+                    StagedPackage staged = stagedPackages.get(item.name);
+                    if (staged == null) {
+                        throw new LoaderException("Installed package is missing from staging: " + item.name);
+                    }
+                    files = staged.files;
                 }
                 if (files.isEmpty()) {
                     throw new LoaderException("Package " + item.name + " did not produce any files");
@@ -100,8 +148,18 @@ final class Installer {
                     if (reusable) {
                         hashes.put(normalized, oldReceipt.hashes.get(normalized));
                     } else {
+                        StagedPackage staged = stagedPackages.get(item.name);
+                        String stagedHash = staged.hashes.get(normalized);
+                        if (stagedHash == null || !stagedHash.matches("[0-9a-fA-F]{32}")) {
+                            throw new LoaderException("Package staging is missing an MD5 receipt for " +
+                                normalized);
+                        }
+                        Path source = PathSafety.resolve(staged.root, normalized);
+                        Path destination = PathSafety.resolve(content, normalized);
+                        Files.createDirectories(destination.getParent());
+                        move(source, destination);
                         stagedPaths.add(normalized);
-                        hashes.put(normalized, sha256(PathSafety.resolve(content, normalized)));
+                        hashes.put(normalized, stagedHash.toLowerCase(Locale.ROOT));
                     }
                 }
                 receipts.put(item.name, new InstalledState.Receipt(
@@ -125,6 +183,7 @@ final class Installer {
             }
 
             next.receipts = receipts;
+            progress.phase("Committing modpack update...");
             commit(stagedPaths, removals, content, backup, next);
         } catch (UnrecoverableBootstrapException e) {
             throw e;
@@ -157,8 +216,8 @@ final class Installer {
                 return false;
             }
             String expectedHash = receipt.hashes.get(relative);
-            if (expectedHash == null || !expectedHash.matches("[0-9a-fA-F]{64}") ||
-                !expectedHash.equalsIgnoreCase(sha256(file))) {
+            if (expectedHash == null || !expectedHash.matches("[0-9a-fA-F]{32}") ||
+                !expectedHash.equalsIgnoreCase(md5(file))) {
                 return false;
             }
         }
@@ -183,29 +242,173 @@ final class Installer {
         throw new LoaderException("Unsupported package format: " + item.download.format);
     }
 
-    private List<String> stage(
-        BootstrapManifest.Package item, Path content, Path downloadDirectory) throws LoaderException {
-        LoaderLog.info("Downloading " + item.name + " " + item.version);
-        Path archive = downloads.download(item, downloadDirectory);
+    private Map<String, DownloadManager.DownloadedFile> downloadAll(
+        List<BootstrapManifest.Package> pending, Path downloadDirectory) throws LoaderException {
+
+        Map<String, DownloadManager.DownloadedFile> result =
+            new LinkedHashMap<String, DownloadManager.DownloadedFile>();
+        if (pending.isEmpty()) {
+            LoaderLog.info("All selected packages are already installed and verified");
+            return result;
+        }
+
+        int workers = Math.min(concurrentDownloads, pending.size());
+        progress.begin(pending, workers);
+        ExecutorService executor = Executors.newFixedThreadPool(
+            workers, workerThreadFactory("solderpy-download-"));
+        Map<BootstrapManifest.Package, Future<DownloadManager.DownloadedFile>> futures =
+            new LinkedHashMap<BootstrapManifest.Package, Future<DownloadManager.DownloadedFile>>();
+        try {
+            for (BootstrapManifest.Package item : pending) {
+                futures.put(item, executor.submit(
+                    () -> downloads.downloadVerified(item, downloadDirectory, progress)));
+            }
+            for (Map.Entry<BootstrapManifest.Package, Future<DownloadManager.DownloadedFile>> entry :
+                futures.entrySet()) {
+                try {
+                    result.put(entry.getKey().name, entry.getValue().get());
+                } catch (ExecutionException e) {
+                    cancelWorkers(futures);
+                    Throwable cause = e.getCause();
+                    if (cause instanceof LoaderException) {
+                        throw (LoaderException) cause;
+                    }
+                    throw new LoaderException(
+                        "Unexpected failure while downloading " + entry.getKey().name, cause);
+                }
+            }
+            return result;
+        } catch (InterruptedException e) {
+            cancelWorkers(futures);
+            Thread.currentThread().interrupt();
+            throw new LoaderException("Interrupted while downloading modpack packages", e);
+        } finally {
+            stopExecutor(executor, "download");
+        }
+    }
+
+    private Map<String, StagedPackage> stageAll(
+        List<BootstrapManifest.Package> pending,
+        Map<String, DownloadManager.DownloadedFile> downloaded,
+        Path packagesDirectory) throws LoaderException {
+
+        Map<String, StagedPackage> result = new LinkedHashMap<String, StagedPackage>();
+        if (pending.isEmpty()) {
+            return result;
+        }
+
+        int workers = Math.min(concurrentExtractions, pending.size());
+        progress.phase("Staging packages with up to " + workers + " concurrent worker(s)...");
+        ExecutorService executor = Executors.newFixedThreadPool(
+            workers, workerThreadFactory("solderpy-extract-"));
+        Map<BootstrapManifest.Package, Future<StagedPackage>> futures =
+            new LinkedHashMap<BootstrapManifest.Package, Future<StagedPackage>>();
+        try {
+            for (int index = 0; index < pending.size(); index++) {
+                BootstrapManifest.Package item = pending.get(index);
+                DownloadManager.DownloadedFile archive = downloaded.get(item.name);
+                if (archive == null) {
+                    throw new LoaderException("Downloaded package is missing from staging: " + item.name);
+                }
+                Path packageRoot = packagesDirectory.resolve(Integer.toString(index));
+                futures.put(item, executor.submit(
+                    () -> stageDownloaded(item, archive, packageRoot)));
+            }
+            for (Map.Entry<BootstrapManifest.Package, Future<StagedPackage>> entry :
+                futures.entrySet()) {
+                try {
+                    result.put(entry.getKey().name, entry.getValue().get());
+                } catch (ExecutionException e) {
+                    cancelWorkers(futures);
+                    Throwable cause = e.getCause();
+                    if (cause instanceof LoaderException) {
+                        throw (LoaderException) cause;
+                    }
+                    throw new LoaderException(
+                        "Unexpected failure while staging " + entry.getKey().name, cause);
+                }
+            }
+            return result;
+        } catch (InterruptedException e) {
+            cancelWorkers(futures);
+            Thread.currentThread().interrupt();
+            throw new LoaderException("Interrupted while staging modpack packages", e);
+        } finally {
+            stopExecutor(executor, "extraction");
+        }
+    }
+
+    private StagedPackage stageDownloaded(
+        BootstrapManifest.Package item,
+        DownloadManager.DownloadedFile archive,
+        Path packageRoot) throws LoaderException {
+
         try {
             if ("jar".equals(item.download.format)) {
+                progress.installing(item);
                 String relative = PathSafety.normalizeRelative(item.download.path, false);
-                Path output = PathSafety.resolve(content, relative);
+                Path output = PathSafety.resolve(packageRoot, relative);
                 Files.createDirectories(output.getParent());
-                Files.move(archive, output, StandardCopyOption.REPLACE_EXISTING);
-                return Collections.singletonList(relative);
+                Files.move(archive.path, output, StandardCopyOption.REPLACE_EXISTING);
+                Map<String, String> hashes = new LinkedHashMap<String, String>();
+                hashes.put(relative, archive.md5);
+                progress.installed(item);
+                return new StagedPackage(packageRoot,
+                    Collections.singletonList(relative), hashes);
             }
             if ("solder_zip".equals(item.download.format)) {
-                return zipExtractor.extract(archive, item.download.extractTo, content);
+                progress.installing(item, zipExtractor.extractionAction());
+                SafeZipExtractor.Extraction extraction = zipExtractor.extractWithMd5(
+                    archive.path, item.download.extractTo, packageRoot);
+                progress.installed(item);
+                return new StagedPackage(packageRoot, extraction.files, extraction.hashes);
             }
             throw new LoaderException("Unsupported package format: " + item.download.format);
         } catch (IOException e) {
             throw new LoaderException("Could not stage package " + item.name, e);
         } finally {
             try {
-                Files.deleteIfExists(archive);
+                Files.deleteIfExists(archive.path);
             } catch (IOException ignored) {
             }
+        }
+    }
+
+    private static ThreadFactory workerThreadFactory(String prefix) {
+        AtomicInteger number = new AtomicInteger();
+        return runnable -> {
+            Thread thread = new Thread(runnable, prefix + number.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
+    private static <T> void cancelWorkers(
+        Map<BootstrapManifest.Package, Future<T>> futures) {
+
+        for (Future<T> future : futures.values()) {
+            future.cancel(true);
+        }
+    }
+
+    private static void stopExecutor(ExecutorService executor, String workerType) {
+        executor.shutdownNow();
+        boolean interrupted = false;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(65);
+        while (!executor.isTerminated()) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                LoaderLog.warn("Timed out while stopping package " + workerType + " workers");
+                break;
+            }
+            try {
+                executor.awaitTermination(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -301,17 +504,17 @@ final class Installer {
         }
     }
 
-    private static String sha256(Path file) throws LoaderException {
+    private static String md5(Path file) throws LoaderException {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            MessageDigest digest = MessageDigest.getInstance("MD5");
             try (InputStream input = Files.newInputStream(file)) {
-                byte[] buffer = new byte[64 * 1024];
+                byte[] buffer = new byte[256 * 1024];
                 int read;
                 while ((read = input.read(buffer)) >= 0) {
                     digest.update(buffer, 0, read);
                 }
             }
-            StringBuilder result = new StringBuilder(64);
+            StringBuilder result = new StringBuilder(32);
             for (byte value : digest.digest()) {
                 result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
             }
@@ -319,7 +522,19 @@ final class Installer {
         } catch (IOException e) {
             throw new LoaderException("Could not verify installed file " + file, e);
         } catch (NoSuchAlgorithmException e) {
-            throw new LoaderException("This Java runtime does not provide SHA-256", e);
+            throw new LoaderException("This Java runtime does not provide MD5", e);
+        }
+    }
+
+    private static final class StagedPackage {
+        private final Path root;
+        private final List<String> files;
+        private final Map<String, String> hashes;
+
+        private StagedPackage(Path root, List<String> files, Map<String, String> hashes) {
+            this.root = root;
+            this.files = new ArrayList<String>(files);
+            this.hashes = new LinkedHashMap<String, String>(hashes);
         }
     }
 

@@ -16,6 +16,10 @@ final class LoaderConfig {
     static final long DEFAULT_MAX_DOWNLOAD_BYTES = 512L * 1024L * 1024L;
     static final long DEFAULT_MAX_EXPANDED_BYTES = 2L * 1024L * 1024L * 1024L;
     static final int DEFAULT_MAX_ARCHIVE_ENTRIES = 100_000;
+    static final int DEFAULT_MAX_CONCURRENT_DOWNLOADS = 4;
+    static final int MAX_CONCURRENT_DOWNLOADS = 16;
+    static final int DEFAULT_MAX_CONCURRENT_EXTRACTIONS = 4;
+    static final int MAX_CONCURRENT_EXTRACTIONS = 16;
 
     boolean enabled = true;
     String api;
@@ -33,6 +37,8 @@ final class LoaderConfig {
         long maxDownloadBytes = DEFAULT_MAX_DOWNLOAD_BYTES;
         long maxExpandedBytes = DEFAULT_MAX_EXPANDED_BYTES;
         int maxArchiveEntries = DEFAULT_MAX_ARCHIVE_ENTRIES;
+        int maxConcurrentDownloads = DEFAULT_MAX_CONCURRENT_DOWNLOADS;
+        int maxConcurrentExtractions = DEFAULT_MAX_CONCURRENT_EXTRACTIONS;
     }
 
     static LoaderConfig load(Path file) throws LoaderException {
@@ -109,6 +115,16 @@ final class LoaderConfig {
             limits.maxArchiveEntries > DEFAULT_MAX_ARCHIVE_ENTRIES) {
             throw new LoaderException("limits.maxArchiveEntries must be between 1 and " +
                 DEFAULT_MAX_ARCHIVE_ENTRIES);
+        }
+        if (limits.maxConcurrentDownloads <= 0 ||
+            limits.maxConcurrentDownloads > MAX_CONCURRENT_DOWNLOADS) {
+            throw new LoaderException("limits.maxConcurrentDownloads must be between 1 and " +
+                MAX_CONCURRENT_DOWNLOADS);
+        }
+        if (limits.maxConcurrentExtractions <= 0 ||
+            limits.maxConcurrentExtractions > MAX_CONCURRENT_EXTRACTIONS) {
+            throw new LoaderException("limits.maxConcurrentExtractions must be between 1 and " +
+                MAX_CONCURRENT_EXTRACTIONS);
         }
 
         try {

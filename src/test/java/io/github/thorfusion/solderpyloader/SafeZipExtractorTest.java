@@ -9,7 +9,9 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.List;
+import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -24,12 +26,28 @@ class SafeZipExtractorTest {
         writeEntry(archive, "config/example.cfg", "enabled=true", 0);
         Path output = temporary.resolve("output");
 
-        List<String> files = new SafeZipExtractor(1024, 10)
-            .extract(archive, ".", output);
+        SafeZipExtractor.Extraction extraction = new SafeZipExtractor(1024, 10)
+            .extractWithMd5(archive, ".", output);
+        List<String> files = extraction.files;
 
         assertEquals(1, files.size());
         assertEquals("config/example.cfg", files.get(0));
+        assertEquals(md5("enabled=true"), extraction.hashes.get("config/example.cfg"));
         assertTrue(Files.isRegularFile(output.resolve("config/example.cfg")));
+    }
+
+    @Test
+    void builtInExtractorAlsoProducesMd5Receipts() throws Exception {
+        Path archive = temporary.resolve("built-in.zip");
+        writeEntry(archive, "resourcepacks/example.txt", "contents", 0);
+        Path output = temporary.resolve("built-in-output");
+
+        SafeZipExtractor.Extraction extraction = new SafeZipExtractor(1024, 10, null)
+            .extractWithMd5(archive, ".", output);
+
+        assertEquals(md5("contents"),
+            extraction.hashes.get("resourcepacks/example.txt"));
+        assertTrue(Files.isRegularFile(output.resolve("resourcepacks/example.txt")));
     }
 
     @Test
@@ -63,5 +81,14 @@ class SafeZipExtractorTest {
             zip.closeArchiveEntry();
         }
     }
-}
 
+    private static String md5(String value) throws Exception {
+        byte[] digest = MessageDigest.getInstance("MD5")
+            .digest(value.getBytes(StandardCharsets.UTF_8));
+        StringBuilder result = new StringBuilder(32);
+        for (byte item : digest) {
+            result.append(String.format(Locale.ROOT, "%02x", item & 0xff));
+        }
+        return result.toString();
+    }
+}

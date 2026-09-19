@@ -56,9 +56,16 @@ final class BootstrapEngine {
         next.manifest = plan.manifest;
         next.selectedMemberships = new ArrayList<Long>(plan.requestedMemberships);
 
-        Installer installer = new Installer(
-            paths.gameDirectory(), paths.dataDirectory(), config.limits, paths.loaderJar());
-        installer.reconcile(plan.selected, previous, next);
+        BootstrapProgress progress = BootstrapProgress.create(
+            "client".equals(config.target) && OptionalSelectionScreen.isAvailable());
+        try {
+            Installer installer = new Installer(
+                paths.gameDirectory(), paths.dataDirectory(), config.limits,
+                paths.loaderJar(), progress);
+            installer.reconcile(plan.selected, previous, next);
+        } finally {
+            progress.close();
+        }
         LoaderLog.info("Modpack is ready (" + plan.selected.size() + " managed package(s))");
     }
 

@@ -85,6 +85,26 @@ class LoaderConfigTest {
     }
 
     @Test
+    void rejectsExcessiveDownloadConcurrency() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"limits\":{\"maxConcurrentDownloads\":17}}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(LoaderException.class, () -> LoaderConfig.load(configFile));
+    }
+
+    @Test
+    void rejectsExcessiveExtractionConcurrency() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"limits\":{\"maxConcurrentExtractions\":17}}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(LoaderException.class, () -> LoaderConfig.load(configFile));
+    }
+
+    @Test
     void rejectsFileBasedSelections() throws Exception {
         Path configFile = temporary.resolve("loader.json");
         Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +

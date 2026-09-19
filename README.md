@@ -13,10 +13,11 @@ before Forge, NeoForge, Fabric, or Quilt discovers mods.
 This project is an early implementation. It provides an interactive pre-launch
 optional-content screen, API-provided basic optionals and advanced
 single/multiple groups, dependency closure, ETag revalidation, MD5/size
-verification, direct raw-JAR installation, safe ZIP extraction for non-mod
-content, file ownership receipts, and transactional rollback. The API controls
-the available choices, rules, and defaults; the local JSON configuration cannot
-override them.
+verification, bounded parallel downloads with live throughput, direct raw-JAR
+installation, parallel safe ZIP extraction for non-mod content, optional
+installed 7-Zip acceleration, file ownership receipts, and transactional
+rollback. The API controls the available choices, rules, and defaults; the
+local JSON configuration cannot override them.
 
 ## Requirements
 
@@ -88,22 +89,42 @@ possible.
 
 Plain HTTP is rejected except for loopback development servers. Downloads are
 limited to 512 MiB per artifact and ZIPs to 2 GiB expanded / 100,000 entries
-by default. The optional `limits` object can lower those values:
+by default. The optional `limits` object can lower those resource ceilings and
+tune download/extraction concurrency:
 
 ```json
 {
   "limits": {
     "maxDownloadBytes": 536870912,
     "maxExpandedBytes": 2147483648,
-    "maxArchiveEntries": 100000
+    "maxArchiveEntries": 100000,
+    "maxConcurrentDownloads": 4,
+    "maxConcurrentExtractions": 4
   }
 }
 ```
 
+The loader downloads up to four changed packages in parallel by default. Set
+`maxConcurrentDownloads` between 1 and 16 to tune this for the connection and
+server. It also stages up to four independent packages in parallel; set
+`maxConcurrentExtractions` between 1 and 16 to tune CPU and disk usage. The
+final transactional commit remains ordered.
+
+If the 7-Zip command-line program is installed, the loader discovers it and
+uses `-mmt=on` for ZIP extraction. On Windows it checks the normal 7-Zip
+installation directories before `PATH`; on other systems it checks `7zz`,
+`7z`, and `7za`. `SOLDERPY_7ZIP` or the `solderpy.loader.7zip` JVM property can
+name an explicit executable. Every archive is inspected with Commons Compress
+before 7-Zip runs and the isolated output is audited afterward. If 7-Zip is
+unavailable or exits unsuccessfully, the loader cleans that attempt and falls
+back to its built-in extractor. 7-Zip is invoked as an optional user-installed
+program and is not bundled in the loader JAR.
+
 Runtime cache and ownership receipts live under `.solderpy-loader/`. The
 cached manifest is reused only when the API returns `304 Not Modified`; it is
-not a separate server-side selection configuration. Receipts contain SHA-256
-hashes, so a missing or locally changed managed file is downloaded again. A
+not a separate server-side selection configuration. Package downloads and
+installed-file receipts use MD5; the manifest itself retains its API-provided
+SHA-256 hash. A missing or locally changed managed file is downloaded again. A
 failed install restores the previous files and state before Minecraft
 continues. By default, an update failure aborts startup; `failOpen: true`
 continues only after failures known to have left a complete, hash-verified

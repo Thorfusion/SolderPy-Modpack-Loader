@@ -60,6 +60,8 @@ class BootstrapIntegrationTest {
 
             InstalledState installed = InstalledState.load(data);
             assertFalse(installed.receipts.get("example").hashes.isEmpty());
+            assertEquals(md5(jarBytes),
+                installed.receipts.get("example").hashes.get("mods/example-1.0.jar"));
             assertTrue(installer.isInstalledStateIntact(
                 Collections.singletonList(response.manifest.packages.get(0)), installed));
             Files.write(installedJar, "locally-modified".getBytes(StandardCharsets.UTF_8));
