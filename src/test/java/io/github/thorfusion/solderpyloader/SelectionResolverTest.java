@@ -112,6 +112,37 @@ class SelectionResolverTest {
             OptionalSelectionScreen.selectableMemberships(manifest));
     }
 
+    @Test
+    void existingOptionalChoicesPersistWhileNewOptionsUseApiDefaults() {
+        BootstrapManifest previousManifest = manifest();
+        InstalledState previous = new InstalledState();
+        previous.manifest = previousManifest;
+        previous.selectedMemberships = Arrays.asList(11L, 13L);
+
+        BootstrapManifest current = manifest();
+        BootstrapManifest.Package newOption = item(14, "map", 1, null);
+        current.packages = Arrays.asList(
+            current.packages.get(0), current.packages.get(1),
+            current.packages.get(2), newOption);
+        current.selectionPolicy.defaultMemberships = Arrays.asList(11L, 12L, 14L);
+
+        assertEquals(new LinkedHashSet<Long>(Arrays.asList(11L, 14L, 13L)),
+            new LinkedHashSet<Long>(
+                BootstrapEngine.initialMemberships(current, previous, true)));
+    }
+
+    @Test
+    void serverSelectionAlwaysStartsFromApiDefaults() {
+        BootstrapManifest current = manifest();
+        InstalledState previous = new InstalledState();
+        previous.manifest = current;
+        previous.selectedMemberships = Arrays.asList(11L, 13L);
+
+        assertEquals(new LinkedHashSet<Long>(Arrays.asList(11L, 12L)),
+            new LinkedHashSet<Long>(
+                BootstrapEngine.initialMemberships(current, previous, false)));
+    }
+
     private static BootstrapManifest manifest() {
         BootstrapManifest manifest = new BootstrapManifest();
         manifest.optionalMode = new BootstrapManifest.OptionalMode();

@@ -33,8 +33,17 @@ require_entry() {
 require_entry 'io/github/thorfusion/solderpyloader/SolderPyAgent.class'
 require_entry 'io/github/thorfusion/solderpyloader/SolderPyRelaunchProvider.class'
 require_entry 'META-INF/services/com.juanmuscaria.relauncher.CommandLineProvider'
-require_entry 'com/google/gson/Gson.class'
-require_entry 'org/apache/commons/compress/archivers/zip/ZipFile.class'
+require_entry 'io/github/thorfusion/solderpyloader/internal/gson/Gson.class'
+require_entry 'io/github/thorfusion/solderpyloader/internal/compress/archivers/zip/ZipFile.class'
+require_entry 'io/github/thorfusion/solderpyloader/internal/io/IOUtils.class'
+require_entry 'META-INF/LICENSE'
+require_entry 'META-INF/LICENSE.txt'
+require_entry 'META-INF/THIRD-PARTY-NOTICES.md'
+
+if grep -Eq '^(com/google/gson|org/apache/commons/(compress|io))/' "$listing"; then
+    echo 'Embedded dependencies must be relocated away from Minecraft libraries.' >&2
+    exit 1
+fi
 
 if grep -Fqx 'com/juanmuscaria/relauncher/Relauncher.class' "$listing"; then
     echo 'Relauncher Core must remain compile-only and must not be bundled.' >&2

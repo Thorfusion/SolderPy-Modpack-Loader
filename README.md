@@ -54,12 +54,15 @@ loader stops with an actionable error instead of installing the wrong files.
 
 `clientId` is the non-secret Solder client UUID (`cid`) used for a private
 pack. Solder API keys are deliberately not accepted in the local config.
-The selection screen starts from the API manifest's
-`selection_policy.default_memberships`. The loader combines the user's choices
-with `required_memberships`, closes required dependencies, and validates
-advanced group limits. This makes the API authoritative for both basic and
-advanced optionals. A legacy `selections` field in this file is rejected so a
-stale local preference cannot silently override the server.
+On a pack's first launch, the selection screen starts from the API manifest's
+`selection_policy.default_memberships`. Later launches remember choices for
+options that still exist, while newly added options use their current API
+defaults. The loader combines the user's choices with `required_memberships`,
+closes required dependencies, and validates advanced group limits. The API
+remains authoritative for the available choices and rules; **Restore API
+Defaults** discards the remembered choices shown on the screen. A legacy
+`selections` field in this file is rejected so configuration cannot override
+the server.
 
 ## Optional selection
 
@@ -69,11 +72,12 @@ advanced single-choice groups use radio buttons, and multiple-choice groups
 use checkboxes with their API-provided limits. Package and group descriptions
 also come from the manifest.
 
-The screen is initialized from the API defaults on every launch. Closing it or
-selecting **Cancel Launch** aborts startup. Dedicated servers request the
-server manifest, install only `SERVER` and `BOTH` packages, skip the screen,
-and use the API defaults. Graphical headless clients also skip the screen and
-use those defaults.
+The screen is initialized from remembered choices for existing options and API
+defaults for new options. Closing it or selecting **Cancel Launch** aborts
+startup. Dedicated servers request the server manifest, install only `SERVER`
+and `BOTH` packages, skip the screen, and always use the API defaults.
+Graphical headless clients skip the screen and reuse remembered choices where
+possible.
 
 Plain HTTP is rejected except for loopback development servers. Downloads are
 limited to 512 MiB per artifact and ZIPs to 2 GiB expanded / 100,000 entries
@@ -91,10 +95,13 @@ by default. The optional `limits` object can lower those values:
 
 Runtime cache and ownership receipts live under `.solderpy-loader/`. The
 cached manifest is reused only when the API returns `304 Not Modified`; it is
-not a separate selection configuration. A failed install restores the
-previous files and state before Minecraft continues. By default, an update
-failure aborts startup; set `failOpen` to `true` only if starting the previously
-installed pack is preferable to enforcing updates.
+not a separate server-side selection configuration. Receipts contain SHA-256
+hashes, so a missing or locally changed managed file is downloaded again. A
+failed install restores the previous files and state before Minecraft
+continues. By default, an update failure aborts startup; `failOpen: true`
+continues only after failures known to have left a complete, hash-verified
+previous installation intact. First installs, lock failures, corrupt local
+state, and incomplete rollbacks always abort.
 
 ## Artifact delivery
 
@@ -109,10 +116,12 @@ faster direct-install path.
 ## Build
 
 ```text
-./gradlew clean test build
+./gradlew clean check shadowJar
 ```
 
-The distributable, dependency-contained JAR is written to `build/libs/`.
+The distributable, dependency-contained JAR is written to `build/libs/`. Its
+libraries are relocated to private package names so Minecraft's older bundled
+libraries cannot override them. The `-thin.jar` is not a release artifact.
 Relauncher Core is compile-only because the universal Relauncher JAR provides
 its SPI at runtime.
 

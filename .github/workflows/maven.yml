@@ -69,7 +69,7 @@ jobs:
           fi
 
       - name: Build and test release
-        run: ./gradlew --no-daemon --stacktrace clean check jar
+        run: ./gradlew --no-daemon --stacktrace clean check shadowJar
 
       - name: Validate packaged artifact
         shell: bash

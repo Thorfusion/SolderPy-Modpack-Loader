@@ -89,7 +89,7 @@ jobs:
           echo "file=build/libs/solderpy-loader-${version}.jar" >> "$GITHUB_OUTPUT"
 
       - name: Build and test
-        run: ./gradlew --no-daemon --stacktrace clean check jar
+        run: ./gradlew --no-daemon --stacktrace clean check shadowJar
         env:
           BUILD_VER: ${{ steps.artifact.outputs.suffix }}
 

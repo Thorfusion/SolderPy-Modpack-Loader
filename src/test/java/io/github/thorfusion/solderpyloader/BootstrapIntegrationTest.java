@@ -18,6 +18,7 @@ import java.util.Locale;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BootstrapIntegrationTest {
@@ -48,12 +49,28 @@ class BootstrapIntegrationTest {
 
             InstalledState next = new InstalledState();
             Path data = gameDirectory.resolve(".solderpy-loader");
-            new Installer(gameDirectory, data, config.limits).reconcile(
+            Installer installer = new Installer(gameDirectory, data, config.limits);
+            installer.reconcile(
                 Collections.singletonList(response.manifest.packages.get(0)),
                 new InstalledState(), next);
 
-            assertArrayEquals(jarBytes, Files.readAllBytes(gameDirectory.resolve("mods/example-1.0.jar")));
+            Path installedJar = gameDirectory.resolve("mods/example-1.0.jar");
+            assertArrayEquals(jarBytes, Files.readAllBytes(installedJar));
             assertTrue(Files.isRegularFile(data.resolve("state.json")));
+
+            InstalledState installed = InstalledState.load(data);
+            assertFalse(installed.receipts.get("example").hashes.isEmpty());
+            assertTrue(installer.isInstalledStateIntact(
+                Collections.singletonList(response.manifest.packages.get(0)), installed));
+            Files.write(installedJar, "locally-modified".getBytes(StandardCharsets.UTF_8));
+            assertFalse(installer.isInstalledStateIntact(
+                Collections.singletonList(response.manifest.packages.get(0)), installed));
+
+            installer.reconcile(
+                Collections.singletonList(response.manifest.packages.get(0)),
+                installed, new InstalledState());
+
+            assertArrayEquals(jarBytes, Files.readAllBytes(installedJar));
         } finally {
             server.stop(0);
         }

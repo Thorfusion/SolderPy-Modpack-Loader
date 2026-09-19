@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'maven-publish'
+    id 'com.gradleup.shadow' version '9.6.1'
 }
 
 group = 'com.thorfusion'
@@ -14,6 +15,10 @@ repositories {
     mavenCentral()
 }
 
+configurations {
+    legacyCompatibilityTest
+}
+
 dependencies {
     compileOnly 'com.juanmuscaria:relauncher-core:1.1.1'
 
@@ -24,6 +29,8 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
+    legacyCompatibilityTest 'commons-io:commons-io:2.4'
 }
 
 java {
@@ -43,6 +50,7 @@ tasks.withType(Test).configureEach {
 
 jar {
     archiveBaseName = 'solderpy-loader'
+    archiveClassifier = 'thin'
     manifest {
         attributes(
             'Premain-Class': 'io.github.thorfusion.solderpyloader.SolderPyAgent',
@@ -53,24 +61,53 @@ jar {
         )
     }
 
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    from {
-        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
-    }
     from('LICENSE') {
         into 'META-INF'
     }
-    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class', 'META-INF/versions/**/module-info.class'
+}
+
+shadowJar {
+    archiveBaseName = 'solderpy-loader'
+    archiveClassifier = ''
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    relocate 'com.google.gson', 'io.github.thorfusion.solderpyloader.internal.gson'
+    relocate 'org.apache.commons.compress', 'io.github.thorfusion.solderpyloader.internal.compress'
+    relocate 'org.apache.commons.io', 'io.github.thorfusion.solderpyloader.internal.io'
+
+    exclude 'META-INF/NOTICE', 'META-INF/NOTICE.txt'
+    from('LICENSE') {
+        into 'META-INF'
+    }
+    from('THIRD-PARTY-NOTICES.md') {
+        into 'META-INF'
+    }
+}
+
+tasks.register('legacyClasspathSmokeTest', JavaExec) {
+    dependsOn tasks.named('shadowJar'), tasks.named('testClasses')
+    group = 'verification'
+    description = 'Verifies the packaged loader beside Minecraft 1.7.10-era Commons IO.'
+    classpath = files(
+        sourceSets.test.output,
+        configurations.legacyCompatibilityTest,
+        tasks.named('shadowJar').flatMap { it.archiveFile }
+    )
+    mainClass = 'io.github.thorfusion.solderpyloader.PackagedArtifactProbe'
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('legacyClasspathSmokeTest')
 }
 
 tasks.named('build') {
-    dependsOn tasks.named('jar')
+    dependsOn tasks.named('shadowJar')
 }
 
 publishing {
     publications {
         mavenJava(MavenPublication) {
-            artifact tasks.named('jar')
+            artifact tasks.named('shadowJar')
             artifactId = 'solderpy-loader'
 
             pom {

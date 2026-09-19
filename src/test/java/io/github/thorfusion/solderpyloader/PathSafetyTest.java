@@ -20,5 +20,13 @@ class PathSafetyTest {
             () -> PathSafety.normalizeRelative("mods/example.jar:payload", false));
         assertThrows(LoaderException.class,
             () -> PathSafety.normalizeRelative("config/NUL.txt", false));
+        assertThrows(LoaderException.class,
+            () -> PathSafety.normalizeRelative("config/invalid?.cfg", false));
+        assertThrows(LoaderException.class,
+            () -> PathSafety.normalizeRelative("config/<invalid>.cfg", false));
+        assertThrows(LoaderException.class,
+            () -> PathSafety.normalizeRelative("config/line\nbreak.cfg", false));
+        assertThrows(LoaderException.class,
+            () -> PathSafety.normalizeRelative("config/CONOUT$.txt", false));
     }
 }

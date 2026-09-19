@@ -28,6 +28,7 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -40,12 +41,13 @@ final class OptionalSelectionScreen {
     private final Map<Long, BootstrapManifest.Package> packagesByMembership;
     private final Set<Long> selectableMemberships;
     private final Set<Long> defaults;
+    private final Set<Long> initialSelections;
     private final List<ChoiceControl> controls = new ArrayList<ChoiceControl>();
     private final List<ButtonGroup> buttonGroups = new ArrayList<ButtonGroup>();
 
     private Set<Long> result;
 
-    private OptionalSelectionScreen(BootstrapManifest manifest) {
+    private OptionalSelectionScreen(BootstrapManifest manifest, Collection<Long> initialSelections) {
         this.manifest = manifest;
         this.packagesByMembership = new LinkedHashMap<Long, BootstrapManifest.Package>();
         for (BootstrapManifest.Package item : manifest.packages) {
@@ -53,6 +55,7 @@ final class OptionalSelectionScreen {
         }
         this.selectableMemberships = selectableMemberships(manifest);
         this.defaults = new LinkedHashSet<Long>(manifest.selectionPolicy.defaultMemberships);
+        this.initialSelections = new LinkedHashSet<Long>(initialSelections);
     }
 
     static boolean isAvailable() {
@@ -85,11 +88,19 @@ final class OptionalSelectionScreen {
     }
 
     static Set<Long> choose(final BootstrapManifest manifest) throws LoaderException {
+        return choose(manifest, manifest.selectionPolicy.defaultMemberships);
+    }
+
+    static Set<Long> choose(
+        final BootstrapManifest manifest, final Collection<Long> initialSelections)
+        throws LoaderException {
+
         if (!isAvailable()) {
             throw new LoaderException("The optional selection screen requires a graphical environment");
         }
 
-        final OptionalSelectionScreen screen = new OptionalSelectionScreen(manifest);
+        final OptionalSelectionScreen screen =
+            new OptionalSelectionScreen(manifest, initialSelections);
         Runnable display = new Runnable() {
             @Override
             public void run() {
@@ -197,8 +208,8 @@ final class OptionalSelectionScreen {
                 }
                 BootstrapManifest.Package item = packagesByMembership.get(choice.membershipId);
                 AbstractButton button = radioGroup == null
-                    ? new JCheckBox(label(item), defaults.contains(choice.membershipId))
-                    : new JRadioButton(label(item), defaults.contains(choice.membershipId));
+                    ? new JCheckBox(label(item), initialSelections.contains(choice.membershipId))
+                    : new JRadioButton(label(item), initialSelections.contains(choice.membershipId));
                 if (radioGroup != null) {
                     radioGroup.add(button);
                 }
@@ -217,7 +228,7 @@ final class OptionalSelectionScreen {
                 item.selection.groupKey != null) {
                 continue;
             }
-            JCheckBox button = new JCheckBox(label(item), defaults.contains(item.membershipId));
+            JCheckBox button = new JCheckBox(label(item), initialSelections.contains(item.membershipId));
             addChoice(section, button, item);
             controls.add(new ChoiceControl(item.membershipId, button));
             added++;

@@ -24,6 +24,7 @@ final class InstalledState {
     String manifestHash;
     String etag;
     BootstrapManifest manifest;
+    List<Long> selectedMemberships;
     Map<String, Receipt> receipts = new LinkedHashMap<String, Receipt>();
 
     static final class Receipt {
@@ -32,16 +33,24 @@ final class InstalledState {
         String md5;
         String installKey;
         List<String> files = new ArrayList<String>();
+        Map<String, String> hashes = new LinkedHashMap<String, String>();
 
         Receipt() {
         }
 
         Receipt(String slug, String version, String md5, String installKey, List<String> files) {
+            this(slug, version, md5, installKey, files,
+                new LinkedHashMap<String, String>());
+        }
+
+        Receipt(String slug, String version, String md5, String installKey, List<String> files,
+                Map<String, String> hashes) {
             this.slug = slug;
             this.version = version;
             this.md5 = md5;
             this.installKey = installKey;
             this.files = new ArrayList<String>(files);
+            this.hashes = new LinkedHashMap<String, String>(hashes);
         }
     }
 
@@ -57,6 +66,11 @@ final class InstalledState {
             }
             if (state.receipts == null) {
                 state.receipts = new LinkedHashMap<String, Receipt>();
+            }
+            for (Receipt receipt : state.receipts.values()) {
+                if (receipt != null && receipt.hashes == null) {
+                    receipt.hashes = new LinkedHashMap<String, String>();
+                }
             }
             return state;
         } catch (JsonParseException e) {

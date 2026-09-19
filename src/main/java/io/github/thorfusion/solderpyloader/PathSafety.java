@@ -2,6 +2,7 @@ package io.github.thorfusion.solderpyloader;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -10,7 +11,7 @@ import java.util.regex.Pattern;
 
 final class PathSafety {
     private static final Pattern WINDOWS_DEVICE = Pattern.compile(
-        "(?i)^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\\..*)?$");
+        "(?i)^(CON|PRN|AUX|NUL|CONIN\\$|CONOUT\\$|COM[1-9]|LPT[1-9])(?:\\..*)?$");
 
     private PathSafety() {
     }
@@ -29,12 +30,18 @@ final class PathSafety {
             if (".".equals(portable) && ".".equals(segment)) {
                 continue;
             }
-            if (segment.indexOf(':') >= 0 || segment.endsWith(" ") || segment.endsWith(".") ||
+            if (containsWindowsIllegalCharacter(segment) ||
+                segment.endsWith(" ") || segment.endsWith(".") ||
                 WINDOWS_DEVICE.matcher(segment).matches()) {
                 throw new LoaderException("Package path is not portable across filesystems: " + value);
             }
         }
-        Path path = Paths.get(portable).normalize();
+        Path path;
+        try {
+            path = Paths.get(portable).normalize();
+        } catch (InvalidPathException e) {
+            throw new LoaderException("Package contains an invalid output path: " + value, e);
+        }
         String normalized = path.toString().replace('\\', '/');
         if (path.isAbsolute() || normalized.equals("..") || normalized.startsWith("../")) {
             throw new LoaderException("Package path escapes the game directory: " + value);
@@ -72,12 +79,28 @@ final class PathSafety {
     static void rejectSymlinkAncestors(Path root, String relative) throws LoaderException {
         Path absoluteRoot = root.toAbsolutePath().normalize();
         Path current = absoluteRoot;
-        Path relativePath = Paths.get(relative);
+        Path relativePath;
+        try {
+            relativePath = Paths.get(normalizeRelative(relative, false));
+        } catch (InvalidPathException e) {
+            throw new LoaderException("Package contains an invalid output path: " + relative, e);
+        }
         for (int i = 0; i < relativePath.getNameCount(); i++) {
             current = current.resolve(relativePath.getName(i));
             if (Files.exists(current, LinkOption.NOFOLLOW_LINKS) && Files.isSymbolicLink(current)) {
                 throw new LoaderException("Refusing to modify a path through a symbolic link: " + current);
             }
         }
+    }
+
+    private static boolean containsWindowsIllegalCharacter(String segment) {
+        for (int index = 0; index < segment.length(); index++) {
+            char value = segment.charAt(index);
+            if (value < 0x20 || value == 0x7f || value == '<' || value == '>' ||
+                value == ':' || value == '"' || value == '|' || value == '?' || value == '*') {
+                return true;
+            }
+        }
+        return false;
     }
 }
