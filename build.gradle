@@ -1,0 +1,119 @@
+plugins {
+    id 'java'
+    id 'maven-publish'
+}
+
+group = 'com.thorfusion'
+def baseVersion = providers.gradleProperty('mod_version').get()
+def buildSuffix = System.getenv('BUILD_VER')
+version = buildSuffix == null || buildSuffix.trim().isEmpty()
+    ? baseVersion
+    : "${baseVersion}-${buildSuffix.trim()}"
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly 'com.juanmuscaria:relauncher-core:1.1.1'
+
+    implementation 'com.google.code.gson:gson:2.11.0'
+    implementation 'org.apache.commons:commons-compress:1.27.1'
+    implementation 'commons-io:commons-io:2.16.1'
+
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 8
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}
+
+jar {
+    archiveBaseName = 'solderpy-loader'
+    manifest {
+        attributes(
+            'Premain-Class': 'io.github.thorfusion.solderpyloader.SolderPyAgent',
+            'Can-Redefine-Classes': 'false',
+            'Can-Retransform-Classes': 'false',
+            'Implementation-Title': 'SolderPy Loader',
+            'Implementation-Version': project.version
+        )
+    }
+
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    from('LICENSE') {
+        into 'META-INF'
+    }
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'module-info.class', 'META-INF/versions/**/module-info.class'
+}
+
+tasks.named('build') {
+    dependsOn tasks.named('jar')
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            artifact tasks.named('jar')
+            artifactId = 'solderpy-loader'
+
+            pom {
+                name = 'SolderPy Loader'
+                description = 'Loader-neutral Minecraft bootstrap mod for solder.py modpacks'
+                url = 'https://github.com/Thorfusion/solderpy_loader'
+                licenses {
+                    license {
+                        name = 'All Rights Reserved'
+                        url = 'https://github.com/Thorfusion/solderpy_loader/blob/main/LICENSE'
+                    }
+                }
+                scm {
+                    connection = 'scm:git:https://github.com/Thorfusion/solderpy_loader.git'
+                    developerConnection = 'scm:git:ssh://git@github.com/Thorfusion/solderpy_loader.git'
+                    url = 'https://github.com/Thorfusion/solderpy_loader'
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            name = 'releaseRepository'
+            def remotePublish = 'true'.equalsIgnoreCase(System.getenv('MAVEN_PUBLISH'))
+            def baseUrl = System.getenv('MAVEN_URL')
+            def repositoryName = System.getenv('MAVEN_REPO')
+            if (!remotePublish) {
+                url = layout.buildDirectory.dir('maven-repository')
+            } else {
+                if (baseUrl == null || baseUrl.trim().isEmpty()) {
+                    throw new GradleException('MAVEN_URL is required when MAVEN_PUBLISH=true')
+                }
+                def normalized = baseUrl.trim().replaceAll('/+$', '')
+                if (repositoryName != null && !repositoryName.trim().isEmpty()) {
+                    normalized += '/' + repositoryName.trim().replaceAll('^/+', '')
+                }
+                url = uri(normalized)
+                credentials {
+                    username = System.getenv('MAVEN_USERNAME') ?: ''
+                    password = System.getenv('MAVEN_PASSWORD') ?: ''
+                }
+            }
+        }
+    }
+}

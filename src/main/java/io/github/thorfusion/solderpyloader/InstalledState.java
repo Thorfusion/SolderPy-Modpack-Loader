@@ -1,0 +1,99 @@
+package io.github.thorfusion.solderpyloader;
+
+import com.google.gson.JsonParseException;
+
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+final class InstalledState {
+    int version = 1;
+    String api;
+    String modpack;
+    String target;
+    String build;
+    String manifestHash;
+    String etag;
+    BootstrapManifest manifest;
+    Map<String, Receipt> receipts = new LinkedHashMap<String, Receipt>();
+
+    static final class Receipt {
+        String slug;
+        String version;
+        String md5;
+        String installKey;
+        List<String> files = new ArrayList<String>();
+
+        Receipt() {
+        }
+
+        Receipt(String slug, String version, String md5, String installKey, List<String> files) {
+            this.slug = slug;
+            this.version = version;
+            this.md5 = md5;
+            this.installKey = installKey;
+            this.files = new ArrayList<String>(files);
+        }
+    }
+
+    static InstalledState load(Path dataDirectory) throws LoaderException {
+        Path file = dataDirectory.resolve("state.json");
+        if (!Files.exists(file)) {
+            return new InstalledState();
+        }
+        try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            InstalledState state = JsonSupport.GSON.fromJson(reader, InstalledState.class);
+            if (state == null || state.version != 1) {
+                throw new LoaderException("Unsupported or empty installed state: " + file);
+            }
+            if (state.receipts == null) {
+                state.receipts = new LinkedHashMap<String, Receipt>();
+            }
+            return state;
+        } catch (JsonParseException e) {
+            throw new LoaderException("Installed state is invalid JSON: " + file, e);
+        } catch (IOException e) {
+            throw new LoaderException("Could not read installed state: " + file, e);
+        }
+    }
+
+    void save(Path dataDirectory) throws LoaderException {
+        try {
+            Files.createDirectories(dataDirectory);
+            Path destination = dataDirectory.resolve("state.json");
+            Path temporary = Files.createTempFile(dataDirectory, "state-", ".tmp");
+            boolean moved = false;
+            try {
+                try (Writer writer = Files.newBufferedWriter(temporary, StandardCharsets.UTF_8)) {
+                    JsonSupport.GSON.toJson(this, writer);
+                }
+                try {
+                    Files.move(temporary, destination, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+                } catch (AtomicMoveNotSupportedException ignored) {
+                    Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING);
+                }
+                moved = true;
+            } finally {
+                if (!moved) {
+                    Files.deleteIfExists(temporary);
+                }
+            }
+        } catch (IOException e) {
+            throw new LoaderException("Could not save installed state", e);
+        }
+    }
+
+    boolean matches(LoaderConfig config) {
+        return config.api.equals(api) && config.modpack.equals(modpack) && config.target.equals(target);
+    }
+}

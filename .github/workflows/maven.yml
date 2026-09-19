@@ -1,0 +1,186 @@
+name: Publish release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, publish Maven, and attach GitHub asset
+    runs-on: self-hosted
+    timeout-minutes: 30
+    environment: release
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.name }}
+      project_version: ${{ steps.artifact.outputs.version }}
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v7
+        with:
+          clean: true
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          validate-wrappers: true
+
+      - name: Grant execute permission for Gradle
+        run: chmod +x gradlew
+
+      - name: Determine artifact name
+        id: artifact
+        shell: bash
+        run: |
+          version="$(sed -n 's/^mod_version=//p' gradle.properties | tr -d '\r' | tail -n 1)"
+          if [[ -z "$version" ]]; then
+            echo 'Could not determine mod_version from gradle.properties.' >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "name=solderpy-loader-${version}.jar" >> "$GITHUB_OUTPUT"
+          echo "file=build/libs/solderpy-loader-${version}.jar" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches the project version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PROJECT_VERSION: ${{ steps.artifact.outputs.version }}
+        run: |
+          if [[ "$RELEASE_TAG" != "$PROJECT_VERSION" ]]; then
+            echo "Release tag '$RELEASE_TAG' must equal mod_version '$PROJECT_VERSION'." >&2
+            exit 1
+          fi
+
+      - name: Build and test release
+        run: ./gradlew --no-daemon --stacktrace clean check jar
+
+      - name: Validate packaged artifact
+        shell: bash
+        run: >-
+          bash .github/scripts/validate-release-artifact.sh
+          '${{ steps.artifact.outputs.file }}'
+          '${{ steps.artifact.outputs.version }}'
+
+      - name: Publish release to Maven
+        shell: bash
+        env:
+          MAVEN_PUBLISH: 'true'
+          MAVEN_URL: ${{ secrets.MAVEN_URL }}
+          MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_TOKEN }}
+          MAVEN_REPO: ${{ secrets.MAVEN_REPO }}
+        run: |
+          if [[ -z "$MAVEN_URL" ]]; then
+            echo 'MAVEN_URL is not configured; skipping release Maven publication.'
+            exit 0
+          fi
+          ./gradlew --no-daemon --no-configuration-cache --stacktrace publish
+
+      - name: Attach artifact to GitHub release
+        uses: Kira-NT/mc-publish@52307b03863581dec6b652b83e597aec02ebb075 # v3.3.1
+        with:
+          github-token: ${{ github.token }}
+          github-tag: ${{ github.event.release.tag_name }}
+          github-generate-changelog: false
+          files: ${{ steps.artifact.outputs.file }}
+          version: ${{ steps.artifact.outputs.version }}
+
+      - name: Save release artifact for publishing jobs
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ github.event.release.tag_name }}
+          path: ${{ steps.artifact.outputs.file }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish-modrinth:
+    name: Publish Modrinth
+    needs: build
+    runs-on: self-hosted
+    timeout-minutes: 30
+    environment: release
+
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: release-${{ github.event.release.tag_name }}
+          path: output
+
+      - name: Publish to Modrinth
+        uses: Kira-NT/mc-publish@52307b03863581dec6b652b83e597aec02ebb075 # v3.3.1
+        with:
+          modrinth-id: 5LpwENAj
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          modrinth-dependencies: |
+            zCFNaupz(required)
+          files: output/${{ needs.build.outputs.artifact_name }}
+          name: SolderPy Loader ${{ needs.build.outputs.project_version }}
+          version: ${{ needs.build.outputs.project_version }}
+          version-type: ${{ github.event.release.prerelease && 'beta' || 'release' }}
+          changelog: ${{ github.event.release.body }}
+          loaders: |
+            forge
+            neoforge
+            fabric
+            quilt
+          game-versions: '>=1.6.4'
+          game-version-filter: releases
+          java: '8'
+          environment: client | server
+          retry-attempts: 2
+
+  publish-curseforge:
+    name: Publish CurseForge
+    needs: build
+    runs-on: self-hosted
+    timeout-minutes: 30
+    environment: release
+
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: release-${{ github.event.release.tag_name }}
+          path: output
+
+      - name: Publish to CurseForge
+        uses: Kira-NT/mc-publish@52307b03863581dec6b652b83e597aec02ebb075 # v3.3.1
+        with:
+          curseforge-id: '1702825'
+          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+          curseforge-dependencies: |
+            1491728(required)
+          files: output/${{ needs.build.outputs.artifact_name }}
+          name: SolderPy Loader ${{ needs.build.outputs.project_version }}
+          version: ${{ needs.build.outputs.project_version }}
+          version-type: ${{ github.event.release.prerelease && 'beta' || 'release' }}
+          changelog: ${{ github.event.release.body }}
+          loaders: |
+            forge
+            neoforge
+            fabric
+            quilt
+          game-versions: '>=1.6.4'
+          game-version-filter: releases
+          java: '8'
+          environment: client | server
+          retry-attempts: 2
