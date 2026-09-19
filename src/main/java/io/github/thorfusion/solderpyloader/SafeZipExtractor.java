@@ -28,6 +28,8 @@ import java.util.stream.Stream;
 
 final class SafeZipExtractor {
     private static final int COPY_BUFFER_BYTES = 256 * 1024;
+    private static final int SEVEN_ZIP_FILE_THRESHOLD = 2_048;
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private final long maxExpandedBytes;
     private final int maxEntries;
@@ -43,10 +45,6 @@ final class SafeZipExtractor {
         this.sevenZip = sevenZip;
     }
 
-    String extractionAction() {
-        return sevenZip == null ? "Extracting ZIP" : "Extracting ZIP with 7-Zip";
-    }
-
     List<String> extract(Path archive, String extractTo, Path stagingRoot) throws LoaderException {
         return extractWithMd5(archive, extractTo, stagingRoot).files;
     }
@@ -54,11 +52,53 @@ final class SafeZipExtractor {
     Extraction extractWithMd5(Path archive, String extractTo, Path stagingRoot)
         throws LoaderException {
 
-        if (sevenZip == null) {
-            return extractBuiltIn(archive, extractTo, stagingRoot);
+        return prepare(archive, extractTo).extract(stagingRoot);
+    }
+
+    Prepared prepare(Path archive, String extractTo) throws LoaderException {
+        ArchivePlan plan = inspect(archive, extractTo);
+        boolean useSevenZip = sevenZip != null && plan.files.size() < SEVEN_ZIP_FILE_THRESHOLD;
+        return new Prepared(archive, extractTo, plan, useSevenZip);
+    }
+
+    final class Prepared {
+        private final Path archive;
+        private final String extractTo;
+        private final ArchivePlan plan;
+        private final boolean useSevenZip;
+
+        private Prepared(
+            Path archive, String extractTo, ArchivePlan plan, boolean useSevenZip) {
+
+            this.archive = archive;
+            this.extractTo = extractTo;
+            this.plan = plan;
+            this.useSevenZip = useSevenZip;
         }
 
-        ArchivePlan plan = inspect(archive, extractTo);
+        String action() {
+            String method = useSevenZip ? "Extracting ZIP with 7-Zip" :
+                "Extracting ZIP in one pass";
+            return method + " (" + String.format(Locale.ROOT, "%,d", plan.files.size()) +
+                " files)";
+        }
+
+        Extraction extract(Path stagingRoot) throws LoaderException {
+            if (!useSevenZip) {
+                if (sevenZip != null && plan.files.size() >= SEVEN_ZIP_FILE_THRESHOLD) {
+                    LoaderLog.info("Using single-pass ZIP extraction for " +
+                        plan.files.size() + " files to avoid a separate per-file 7-Zip audit");
+                }
+                return extractBuiltIn(archive, extractTo, stagingRoot);
+            }
+            return extractWithSevenZip(archive, extractTo, stagingRoot, plan);
+        }
+    }
+
+    private Extraction extractWithSevenZip(
+        Path archive, String extractTo, Path stagingRoot, ArchivePlan plan)
+        throws LoaderException {
+
         Path externalRoot = null;
         try {
             Files.createDirectories(stagingRoot);
@@ -183,6 +223,7 @@ final class SafeZipExtractor {
         Set<String> outputs = new HashSet<String>();
         long expanded = 0;
         int entries = 0;
+        byte[] buffer = new byte[COPY_BUFFER_BYTES];
         // ZipFile reads the central directory. Streaming ZIP readers cannot see
         // Unix link attributes reliably and are therefore unsafe here.
         try (ZipFile zip = open(archive)) {
@@ -205,7 +246,6 @@ final class SafeZipExtractor {
                 MessageDigest digest = md5Digest();
                 try (InputStream entryInput = zip.getInputStream(entry);
                      OutputStream target = Files.newOutputStream(output)) {
-                    byte[] buffer = new byte[COPY_BUFFER_BYTES];
                     int read;
                     while ((read = entryInput.read(buffer)) >= 0) {
                         if (Thread.currentThread().isInterrupted()) {
@@ -285,11 +325,13 @@ final class SafeZipExtractor {
     }
 
     private static String hex(byte[] bytes) {
-        StringBuilder result = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) {
-            result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        char[] result = new char[bytes.length * 2];
+        for (int index = 0; index < bytes.length; index++) {
+            int value = bytes[index] & 0xff;
+            result[index * 2] = HEX[value >>> 4];
+            result[index * 2 + 1] = HEX[value & 0x0f];
         }
-        return result.toString();
+        return new String(result);
     }
 
     private static void deleteTree(Path root) throws IOException {

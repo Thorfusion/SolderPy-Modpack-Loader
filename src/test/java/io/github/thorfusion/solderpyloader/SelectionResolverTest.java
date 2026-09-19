@@ -9,7 +9,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SelectionResolverTest {
     @Test
@@ -143,6 +145,33 @@ class SelectionResolverTest {
                 BootstrapEngine.initialMemberships(current, previous, false)));
     }
 
+    @Test
+    void identicalStoredManifestReusesSavedSelectionsWithoutPrompting() {
+        BootstrapManifest current = versionedManifest('a');
+        InstalledState previous = new InstalledState();
+        previous.build = "1.0";
+        previous.manifestHash = repeat('a', 64);
+        previous.manifest = current;
+        previous.selectedMemberships = Arrays.asList(11L, 13L);
+
+        assertTrue(BootstrapEngine.sameManifest(previous, current));
+        assertTrue(BootstrapEngine.canReuseSavedSelections(current, previous, true));
+        assertFalse(BootstrapEngine.canReuseSavedSelections(current, previous, false));
+    }
+
+    @Test
+    void changedManifestOrInvalidSavedSelectionRequiresPrompting() {
+        BootstrapManifest current = versionedManifest('b');
+        InstalledState previous = new InstalledState();
+        previous.build = "1.0";
+        previous.manifestHash = repeat('a', 64);
+        previous.manifest = current;
+        previous.selectedMemberships = Collections.singletonList(999L);
+
+        assertFalse(BootstrapEngine.sameManifest(previous, current));
+        assertFalse(BootstrapEngine.canReuseSavedSelections(current, previous, true));
+    }
+
     private static BootstrapManifest manifest() {
         BootstrapManifest manifest = new BootstrapManifest();
         manifest.optionalMode = new BootstrapManifest.OptionalMode();
@@ -173,6 +202,22 @@ class SelectionResolverTest {
             choice(13, "fast-world", false));
         manifest.groups = Collections.singletonList(group);
         return manifest;
+    }
+
+    private static BootstrapManifest versionedManifest(char hashCharacter) {
+        BootstrapManifest manifest = manifest();
+        manifest.build = new BootstrapManifest.Build();
+        manifest.build.version = "1.0";
+        manifest.manifestHash = repeat(hashCharacter, 64);
+        return manifest;
+    }
+
+    private static String repeat(char value, int count) {
+        StringBuilder result = new StringBuilder(count);
+        for (int index = 0; index < count; index++) {
+            result.append(value);
+        }
+        return result.toString();
     }
 
     private static BootstrapManifest.Package item(long membership, String slug, int state, String group) {

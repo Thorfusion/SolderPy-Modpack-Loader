@@ -90,6 +90,12 @@ final class BootstrapManifest {
         String format;
         String path;
         @SerializedName("extract_to") String extractTo;
+        List<DownloadSource> sources = new ArrayList<DownloadSource>();
+    }
+
+    static final class DownloadSource {
+        String provider;
+        String url;
     }
 
     static final class Selection {
@@ -203,6 +209,16 @@ final class BootstrapManifest {
         }
         if (download.filesize != null && download.filesize.longValue() < 0) {
             throw new LoaderException("Package " + item.name + " has an invalid download size");
+        }
+        if (download.sources == null) {
+            download.sources = new ArrayList<DownloadSource>();
+        }
+        Set<String> sourceUrls = new HashSet<String>();
+        for (DownloadSource source : download.sources) {
+            if (source == null || isBlank(source.provider) || isBlank(source.url) ||
+                !sourceUrls.add(source.url)) {
+                throw new LoaderException("Package " + item.name + " has invalid download sources");
+            }
         }
         if ("jar".equals(download.format)) {
             if (isBlank(download.path)) {

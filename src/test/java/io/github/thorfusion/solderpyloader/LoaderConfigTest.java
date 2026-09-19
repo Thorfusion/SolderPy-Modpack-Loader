@@ -27,7 +27,44 @@ class LoaderConfigTest {
         assertEquals("http://127.0.0.1:8080/api/", config.api);
         assertEquals("recommended", config.build);
         assertEquals("auto", config.target);
+        assertEquals(25, config.bootstrapJavaMajor);
+        assertEquals(4, config.limits.maxConcurrentDownloads);
+        assertEquals(1, config.limits.maxConcurrentExtractions);
         assertTrue(config.enabled);
+    }
+
+    @Test
+    void acceptsAnExplicitBootstrapJavaRuntime() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"bootstrapJava\":\"  C:/Java/bin/java.exe  \"}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        assertEquals("C:/Java/bin/java.exe", config.bootstrapJava);
+    }
+
+    @Test
+    void acceptsAnExplicitBootstrapJavaMajor() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"bootstrapJavaMajor\":17}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        assertEquals(17, config.bootstrapJavaMajor);
+    }
+
+    @Test
+    void rejectsBootstrapJavaOlderThanEight() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"bootstrapJavaMajor\":7}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(LoaderException.class, () -> LoaderConfig.load(configFile));
     }
 
     @Test

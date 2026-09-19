@@ -18,8 +18,9 @@ final class LoaderConfig {
     static final int DEFAULT_MAX_ARCHIVE_ENTRIES = 100_000;
     static final int DEFAULT_MAX_CONCURRENT_DOWNLOADS = 4;
     static final int MAX_CONCURRENT_DOWNLOADS = 16;
-    static final int DEFAULT_MAX_CONCURRENT_EXTRACTIONS = 4;
+    static final int DEFAULT_MAX_CONCURRENT_EXTRACTIONS = 1;
     static final int MAX_CONCURRENT_EXTRACTIONS = 16;
+    static final int DEFAULT_BOOTSTRAP_JAVA_MAJOR = 25;
 
     boolean enabled = true;
     String api;
@@ -27,6 +28,8 @@ final class LoaderConfig {
     String build = "recommended";
     String target = "auto";
     String clientId;
+    String bootstrapJava;
+    Integer bootstrapJavaMajor = DEFAULT_BOOTSTRAP_JAVA_MAJOR;
     boolean failOpen;
     @SerializedName("selections") JsonElement legacySelections;
     Limits limits = new Limits();
@@ -94,6 +97,17 @@ final class LoaderConfig {
             clientId = null;
         } else if (clientId != null) {
             clientId = clientId.trim();
+        }
+        if (bootstrapJava != null && bootstrapJava.trim().isEmpty()) {
+            bootstrapJava = null;
+        } else if (bootstrapJava != null) {
+            bootstrapJava = bootstrapJava.trim();
+        }
+        if (bootstrapJavaMajor == null) {
+            bootstrapJavaMajor = DEFAULT_BOOTSTRAP_JAVA_MAJOR;
+        }
+        if (bootstrapJavaMajor < 8) {
+            throw new LoaderException("bootstrapJavaMajor must be Java 8 or newer");
         }
         if (legacySelections != null) {
             throw new LoaderException(

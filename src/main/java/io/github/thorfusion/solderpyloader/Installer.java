@@ -2,6 +2,7 @@ package io.github.thorfusion.solderpyloader;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.DirectoryStream;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -12,6 +13,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,6 +32,15 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 final class Installer {
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
+    private static final ThreadLocal<byte[]> MD5_BUFFER =
+        new ThreadLocal<byte[]>() {
+            @Override
+            protected byte[] initialValue() {
+                return new byte[256 * 1024];
+            }
+        };
+
     private final Path gameDirectory;
     private final Path dataDirectory;
     private final Path loaderJar;
@@ -110,6 +121,7 @@ final class Installer {
 
             Map<String, DownloadManager.DownloadedFile> downloaded =
                 downloadAll(pendingDownloads, downloadDirectory);
+            downloaded = verifyAll(pendingDownloads, downloaded);
             Map<String, StagedPackage> stagedPackages =
                 stageAll(pendingDownloads, downloaded, packagesDirectory);
             if (!pendingDownloads.isEmpty()) {
@@ -155,12 +167,16 @@ final class Installer {
                                 normalized);
                         }
                         Path source = PathSafety.resolve(staged.root, normalized);
-                        Path destination = PathSafety.resolve(content, normalized);
-                        Files.createDirectories(destination.getParent());
-                        move(source, destination);
-                        stagedPaths.add(normalized);
                         hashes.put(normalized, stagedHash.toLowerCase(Locale.ROOT));
+                        if (matchesExistingFile(normalized, stagedHash)) {
+                            Files.deleteIfExists(source);
+                        } else {
+                            stagedPaths.add(normalized);
+                        }
                     }
+                }
+                if (!reusable) {
+                    mergeStagedTree(stagedPackages.get(item.name).root, content);
                 }
                 receipts.put(item.name, new InstalledState.Receipt(
                     item.name, item.version, item.download.md5.toLowerCase(Locale.ROOT),
@@ -232,6 +248,54 @@ final class Installer {
         }
     }
 
+    private boolean matchesExistingFile(String relative, String expectedMd5)
+        throws LoaderException {
+
+        PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
+        Path existing = PathSafety.resolve(gameDirectory, relative);
+        return Files.isRegularFile(existing, LinkOption.NOFOLLOW_LINKS) &&
+            expectedMd5.equalsIgnoreCase(md5(existing));
+    }
+
+    private static void mergeStagedTree(Path sourceDirectory, Path destinationDirectory)
+        throws IOException, LoaderException {
+
+        if (!Files.isDirectory(sourceDirectory, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        Files.createDirectories(destinationDirectory);
+        try (DirectoryStream<Path> children = Files.newDirectoryStream(sourceDirectory)) {
+            for (Path source : children) {
+                if (Files.isSymbolicLink(source)) {
+                    throw new LoaderException("Package staging produced a symbolic link: " + source);
+                }
+                Path destination = destinationDirectory.resolve(source.getFileName().toString());
+                if (Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
+                    if (!Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
+                        move(source, destination);
+                    } else if (Files.isDirectory(destination, LinkOption.NOFOLLOW_LINKS)) {
+                        mergeStagedTree(source, destination);
+                    } else {
+                        throw new LoaderException(
+                            "Package staging collides with a non-directory path: " + destination);
+                    }
+                } else if (Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) {
+                    if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
+                        throw new LoaderException(
+                            "Package staging unexpectedly collided at " + destination);
+                    }
+                    move(source, destination);
+                } else {
+                    throw new LoaderException("Package staging produced a non-regular file: " + source);
+                }
+            }
+        }
+        try {
+            Files.deleteIfExists(sourceDirectory);
+        } catch (java.nio.file.DirectoryNotEmptyException ignored) {
+        }
+    }
+
     private static String installKey(BootstrapManifest.Package item) throws LoaderException {
         if ("jar".equals(item.download.format)) {
             return "jar:" + PathSafety.normalizeRelative(item.download.path, false);
@@ -253,7 +317,7 @@ final class Installer {
         }
 
         int workers = Math.min(concurrentDownloads, pending.size());
-        progress.begin(pending, workers);
+        progress.beginDownloads(pending, workers);
         ExecutorService executor = Executors.newFixedThreadPool(
             workers, workerThreadFactory("solderpy-download-"));
         Map<BootstrapManifest.Package, Future<DownloadManager.DownloadedFile>> futures =
@@ -261,7 +325,7 @@ final class Installer {
         try {
             for (BootstrapManifest.Package item : pending) {
                 futures.put(item, executor.submit(
-                    () -> downloads.downloadVerified(item, downloadDirectory, progress)));
+                    () -> downloads.downloadFile(item, downloadDirectory, progress)));
             }
             for (Map.Entry<BootstrapManifest.Package, Future<DownloadManager.DownloadedFile>> entry :
                 futures.entrySet()) {
@@ -287,6 +351,27 @@ final class Installer {
         }
     }
 
+    private Map<String, DownloadManager.DownloadedFile> verifyAll(
+        List<BootstrapManifest.Package> pending,
+        Map<String, DownloadManager.DownloadedFile> downloaded) throws LoaderException {
+
+        if (pending.isEmpty()) {
+            return downloaded;
+        }
+        progress.beginVerification(pending);
+        Map<String, DownloadManager.DownloadedFile> verified =
+            new LinkedHashMap<String, DownloadManager.DownloadedFile>();
+        for (BootstrapManifest.Package item : pending) {
+            DownloadManager.DownloadedFile file = downloaded.get(item.name);
+            if (file == null) {
+                throw new LoaderException("Downloaded package is missing before verification: " +
+                    item.name);
+            }
+            verified.put(item.name, downloads.verifyDownloaded(item, file, progress));
+        }
+        return verified;
+    }
+
     private Map<String, StagedPackage> stageAll(
         List<BootstrapManifest.Package> pending,
         Map<String, DownloadManager.DownloadedFile> downloaded,
@@ -298,7 +383,7 @@ final class Installer {
         }
 
         int workers = Math.min(concurrentExtractions, pending.size());
-        progress.phase("Staging packages with up to " + workers + " concurrent worker(s)...");
+        progress.beginInstallation(pending, workers);
         ExecutorService executor = Executors.newFixedThreadPool(
             workers, workerThreadFactory("solderpy-extract-"));
         Map<BootstrapManifest.Package, Future<StagedPackage>> futures =
@@ -357,9 +442,10 @@ final class Installer {
                     Collections.singletonList(relative), hashes);
             }
             if ("solder_zip".equals(item.download.format)) {
-                progress.installing(item, zipExtractor.extractionAction());
-                SafeZipExtractor.Extraction extraction = zipExtractor.extractWithMd5(
-                    archive.path, item.download.extractTo, packageRoot);
+                SafeZipExtractor.Prepared prepared =
+                    zipExtractor.prepare(archive.path, item.download.extractTo);
+                progress.installing(item, prepared.action());
+                SafeZipExtractor.Extraction extraction = prepared.extract(packageRoot);
                 progress.installed(item);
                 return new StagedPackage(packageRoot, extraction.files, extraction.hashes);
             }
@@ -424,6 +510,7 @@ final class Installer {
         affected.addAll(stagedPaths);
         Map<String, Path> backups = new LinkedHashMap<String, Path>();
         List<Path> installed = new ArrayList<Path>();
+        Set<Path> preparedDirectories = new HashSet<Path>();
 
         try {
             for (String relative : affected) {
@@ -434,7 +521,7 @@ final class Installer {
                         throw new LoaderException("Owned output is not a regular file: " + target);
                     }
                     Path saved = PathSafety.resolve(backup, relative);
-                    Files.createDirectories(saved.getParent());
+                    createParentDirectories(saved, preparedDirectories);
                     move(target, saved);
                     backups.put(relative, saved);
                 }
@@ -444,7 +531,7 @@ final class Installer {
                 Path source = PathSafety.resolve(content, relative);
                 Path target = PathSafety.resolve(gameDirectory, relative);
                 PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
-                Files.createDirectories(target.getParent());
+                createParentDirectories(target, preparedDirectories);
                 move(source, target);
                 installed.add(target);
             }
@@ -462,6 +549,15 @@ final class Installer {
             }
             throw new RecoverableBootstrapException(
                 "Could not commit the modpack update; previous files were restored", failure);
+        }
+    }
+
+    private static void createParentDirectories(Path file, Set<Path> preparedDirectories)
+        throws IOException {
+
+        Path parent = file.getParent();
+        if (parent != null && preparedDirectories.add(parent)) {
+            Files.createDirectories(parent);
         }
     }
 
@@ -508,17 +604,20 @@ final class Installer {
         try {
             MessageDigest digest = MessageDigest.getInstance("MD5");
             try (InputStream input = Files.newInputStream(file)) {
-                byte[] buffer = new byte[256 * 1024];
+                byte[] buffer = MD5_BUFFER.get();
                 int read;
                 while ((read = input.read(buffer)) >= 0) {
                     digest.update(buffer, 0, read);
                 }
             }
-            StringBuilder result = new StringBuilder(32);
-            for (byte value : digest.digest()) {
-                result.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+            byte[] bytes = digest.digest();
+            char[] result = new char[bytes.length * 2];
+            for (int index = 0; index < bytes.length; index++) {
+                int value = bytes[index] & 0xff;
+                result[index * 2] = HEX[value >>> 4];
+                result[index * 2 + 1] = HEX[value & 0x0f];
             }
-            return result.toString();
+            return new String(result);
         } catch (IOException e) {
             throw new LoaderException("Could not verify installed file " + file, e);
         } catch (NoSuchAlgorithmException e) {

@@ -12,9 +12,11 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -31,7 +33,8 @@ class BootstrapIntegrationTest {
         int port = server.getAddress().getPort();
         BootstrapManifest manifest = manifest(port, jarBytes);
         byte[] manifestBytes = JsonSupport.GSON.toJson(manifest).getBytes(StandardCharsets.UTF_8);
-        server.createContext("/", new FixtureHandler(jarBytes, manifestBytes));
+        FixtureHandler fixture = new FixtureHandler(jarBytes, manifestBytes);
+        server.createContext("/", fixture);
         server.start();
         try {
             Path configFile = gameDirectory.resolve("loader.json");
@@ -58,12 +61,27 @@ class BootstrapIntegrationTest {
             assertArrayEquals(jarBytes, Files.readAllBytes(installedJar));
             assertTrue(Files.isRegularFile(data.resolve("state.json")));
 
+            FileTime existingTimestamp = FileTime.fromMillis(1_700_000_000_000L);
+            Files.setLastModifiedTime(installedJar, existingTimestamp);
+            installer.reconcile(
+                Collections.singletonList(response.manifest.packages.get(0)),
+                new InstalledState(), new InstalledState());
+            assertEquals(existingTimestamp, Files.getLastModifiedTime(installedJar));
+            assertArrayEquals(jarBytes, Files.readAllBytes(installedJar));
+
             InstalledState installed = InstalledState.load(data);
             assertFalse(installed.receipts.get("example").hashes.isEmpty());
             assertEquals(md5(jarBytes),
                 installed.receipts.get("example").hashes.get("mods/example-1.0.jar"));
             assertTrue(installer.isInstalledStateIntact(
                 Collections.singletonList(response.manifest.packages.get(0)), installed));
+            int downloadsBeforeReuse = fixture.fileRequests.get();
+            installer.reconcile(
+                Collections.singletonList(response.manifest.packages.get(0)),
+                installed, new InstalledState());
+            assertEquals(downloadsBeforeReuse, fixture.fileRequests.get());
+            assertEquals(existingTimestamp, Files.getLastModifiedTime(installedJar));
+
             Files.write(installedJar, "locally-modified".getBytes(StandardCharsets.UTF_8));
             assertFalse(installer.isInstalledStateIntact(
                 Collections.singletonList(response.manifest.packages.get(0)), installed));
@@ -131,6 +149,7 @@ class BootstrapIntegrationTest {
     private static final class FixtureHandler implements HttpHandler {
         private final byte[] jar;
         private final byte[] manifest;
+        private final AtomicInteger fileRequests = new AtomicInteger();
 
         private FixtureHandler(byte[] jar, byte[] manifest) {
             this.jar = jar;
@@ -149,6 +168,7 @@ class BootstrapIntegrationTest {
                 exchange.getResponseHeaders().set("ETag", "\"fixture-etag\"");
                 send(exchange, 200, "application/json", manifest);
             } else if ("/files/example.jar".equals(path)) {
+                fileRequests.incrementAndGet();
                 send(exchange, 200, "application/octet-stream", jar);
             } else {
                 send(exchange, 404, "text/plain", "missing".getBytes(StandardCharsets.UTF_8));

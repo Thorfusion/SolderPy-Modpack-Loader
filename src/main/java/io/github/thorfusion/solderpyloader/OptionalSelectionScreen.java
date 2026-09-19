@@ -19,6 +19,7 @@ import javax.swing.SwingConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.WindowConstants;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
@@ -39,6 +40,9 @@ import java.util.Set;
 
 /** Loader-neutral optional-content chooser displayed before mod discovery. */
 final class OptionalSelectionScreen {
+    private static final int BASIC_OPTIONS_PER_PAGE = 6;
+    private static final Dimension CHOICE_VIEW_SIZE = new Dimension(680, 440);
+
     private final BootstrapManifest manifest;
     private final Map<Long, BootstrapManifest.Package> packagesByMembership;
     private final Set<Long> selectableMemberships;
@@ -49,7 +53,7 @@ final class OptionalSelectionScreen {
 
     private Set<Long> result;
 
-    private OptionalSelectionScreen(BootstrapManifest manifest, Collection<Long> initialSelections) {
+    OptionalSelectionScreen(BootstrapManifest manifest, Collection<Long> initialSelections) {
         this.manifest = manifest;
         this.packagesByMembership = new LinkedHashMap<Long, BootstrapManifest.Package>();
         for (BootstrapManifest.Package item : manifest.packages) {
@@ -159,20 +163,14 @@ final class OptionalSelectionScreen {
         heading.add(note);
         root.add(heading, BorderLayout.NORTH);
 
-        JPanel choices = new ChoiceListPanel();
-        choices.setLayout(new BoxLayout(choices, BoxLayout.Y_AXIS));
-        if ("advanced".equals(manifest.optionalMode.name)) {
+        if ("basic".equals(manifest.optionalMode.name)) {
+            root.add(createBasicOptionsPager(), BorderLayout.CENTER);
+        } else {
+            JPanel choices = createChoiceList();
             addAdvancedGroups(choices);
+            addUngroupedOptions(choices);
+            root.add(createScrollPane(choices), BorderLayout.CENTER);
         }
-        addUngroupedOptions(choices);
-
-        JScrollPane scroll = new JScrollPane(choices);
-        scroll.setBorder(BorderFactory.createEmptyBorder());
-        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
-        scroll.getVerticalScrollBar().setUnitIncrement(16);
-        scroll.setPreferredSize(new Dimension(680, 440));
-        root.add(scroll, BorderLayout.CENTER);
 
         JButton restore = new JButton("Restore API Defaults");
         restore.addActionListener(event -> restoreDefaults());
@@ -194,6 +192,103 @@ final class OptionalSelectionScreen {
         dialog.pack();
         fitToUsableScreen(dialog);
         dialog.setVisible(true);
+    }
+
+    JPanel createBasicOptionsPager() {
+        List<BootstrapManifest.Package> options = new ArrayList<BootstrapManifest.Package>();
+        for (BootstrapManifest.Package item : manifest.packages) {
+            if (selectableMemberships.contains(item.membershipId) &&
+                item.selection.groupKey == null) {
+                options.add(item);
+            }
+        }
+
+        final int pageCount = Math.max(1,
+            (options.size() + BASIC_OPTIONS_PER_PAGE - 1) / BASIC_OPTIONS_PER_PAGE);
+        final CardLayout pageLayout = new CardLayout();
+        final JPanel pages = new JPanel(pageLayout);
+        for (int page = 0; page < pageCount; page++) {
+            int first = page * BASIC_OPTIONS_PER_PAGE;
+            int last = Math.min(options.size(), first + BASIC_OPTIONS_PER_PAGE);
+            JPanel choices = createChoiceList();
+            JPanel section = section("Optional packages", null,
+                pageCount == 1 ? "Select any packages you want installed."
+                    : "Showing " + (first + 1) + "-" + last + " of " + options.size() + ".");
+            for (int index = first; index < last; index++) {
+                BootstrapManifest.Package item = options.get(index);
+                JCheckBox button = new JCheckBox(
+                    label(item), initialSelections.contains(item.membershipId));
+                addChoice(section, button, item);
+                controls.add(new ChoiceControl(item.membershipId, button));
+            }
+            addSection(choices, section);
+            pages.add(createScrollPane(choices), Integer.toString(page));
+        }
+
+        JPanel result = new JPanel(new BorderLayout(0, 8));
+        result.add(pages, BorderLayout.CENTER);
+        if (pageCount > 1) {
+            final int[] currentPage = {0};
+            final JButton previous = new JButton("Previous");
+            final JButton next = new JButton("Next");
+            final JLabel status = new JLabel("Page 1 of " + pageCount, SwingConstants.CENTER);
+            previous.setEnabled(false);
+
+            previous.addActionListener(event -> {
+                if (currentPage[0] > 0) {
+                    currentPage[0]--;
+                    showBasicPage(pageLayout, pages, currentPage[0], pageCount,
+                        previous, next, status);
+                }
+            });
+            next.addActionListener(event -> {
+                if (currentPage[0] + 1 < pageCount) {
+                    currentPage[0]++;
+                    showBasicPage(pageLayout, pages, currentPage[0], pageCount,
+                        previous, next, status);
+                }
+            });
+
+            JPanel navigation = new JPanel(new BorderLayout(8, 0));
+            navigation.add(previous, BorderLayout.WEST);
+            navigation.add(status, BorderLayout.CENTER);
+            navigation.add(next, BorderLayout.EAST);
+            result.add(navigation, BorderLayout.SOUTH);
+        }
+        return result;
+    }
+
+    private static void showBasicPage(
+        CardLayout layout,
+        JPanel pages,
+        int page,
+        int pageCount,
+        JButton previous,
+        JButton next,
+        JLabel status) {
+
+        layout.show(pages, Integer.toString(page));
+        previous.setEnabled(page > 0);
+        next.setEnabled(page + 1 < pageCount);
+        status.setText("Page " + (page + 1) + " of " + pageCount);
+    }
+
+    private static JPanel createChoiceList() {
+        JPanel choices = new ChoiceListPanel();
+        choices.setLayout(new BoxLayout(choices, BoxLayout.Y_AXIS));
+        return choices;
+    }
+
+    private static JScrollPane createScrollPane(JPanel choices) {
+        JScrollPane scroll = new JScrollPane(choices);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        scroll.getVerticalScrollBar().setBlockIncrement(160);
+        scroll.setPreferredSize(CHOICE_VIEW_SIZE);
+        scroll.setMinimumSize(new Dimension(320, 180));
+        return scroll;
     }
 
     private static void fitToUsableScreen(JDialog dialog) {
@@ -281,15 +376,38 @@ final class OptionalSelectionScreen {
     private static void addChoice(
         JPanel section, AbstractButton button, BootstrapManifest.Package item) {
 
-        button.setAlignmentX(Component.LEFT_ALIGNMENT);
-        section.add(button);
-        if (item.description != null && !item.description.trim().isEmpty()) {
-            JTextArea details = description(item.description);
-            details.setBorder(BorderFactory.createEmptyBorder(0, 22, 5, 4));
-            section.add(details);
-        } else {
-            section.add(Box.createVerticalStrut(3));
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setAlignmentX(Component.LEFT_ALIGNMENT);
+        row.add(button, BorderLayout.CENTER);
+        if (hasText(item.description)) {
+            JButton details = new JButton("Details");
+            details.setToolTipText("Show the package description");
+            details.addActionListener(event -> showOptionDetails(details, item));
+            row.add(details, BorderLayout.EAST);
         }
+        row.setMaximumSize(new Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+        section.add(row);
+        section.add(Box.createVerticalStrut(5));
+    }
+
+    private static void showOptionDetails(Component parent, BootstrapManifest.Package item) {
+        JTextArea text = new JTextArea(item.description, 12, 60);
+        text.setEditable(false);
+        text.setFocusable(true);
+        text.setLineWrap(true);
+        text.setWrapStyleWord(true);
+        text.setFont(new JLabel().getFont());
+        text.setCaretPosition(0);
+        text.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+
+        JScrollPane scroll = new JScrollPane(text);
+        scroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+        scroll.setPreferredSize(new Dimension(600, 260));
+
+        JOptionPane.showMessageDialog(parent, scroll, label(item),
+            JOptionPane.INFORMATION_MESSAGE);
     }
 
     private static JTextArea description(String value) {
@@ -309,10 +427,15 @@ final class OptionalSelectionScreen {
 
     private static void addSection(JPanel choices, JPanel section) {
         section.setAlignmentX(Component.LEFT_ALIGNMENT);
-        section.setMaximumSize(new Dimension(Integer.MAX_VALUE,
-            section.getPreferredSize().height));
+        // Wrapped text can change its preferred height after the viewport assigns its
+        // final width. Never freeze the section at its pre-layout preferred height.
+        section.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
         choices.add(section);
         choices.add(Box.createVerticalStrut(8));
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
     }
 
     private void restoreDefaults() {
@@ -392,7 +515,10 @@ final class OptionalSelectionScreen {
     private static final class ChoiceListPanel extends JPanel implements Scrollable {
         @Override
         public Dimension getPreferredScrollableViewportSize() {
-            return getPreferredSize();
+            Dimension preferred = getPreferredSize();
+            return new Dimension(
+                Math.min(preferred.width, CHOICE_VIEW_SIZE.width),
+                Math.min(preferred.height, CHOICE_VIEW_SIZE.height));
         }
 
         @Override

@@ -81,6 +81,7 @@ final class BootstrapEngine {
 
             BootstrapManifest manifest;
             String etag;
+            boolean manifestUnchanged;
             if (response.notModified) {
                 if (previous.manifest == null) {
                     throw new LoaderException("Server returned 304 but no cached manifest is available");
@@ -88,16 +89,28 @@ final class BootstrapEngine {
                 manifest = previous.manifest;
                 manifest.validate(config.modpack, config.target);
                 etag = previous.etag;
-                LoaderLog.info("Manifest is unchanged; reconciling selections");
+                manifestUnchanged = true;
             } else {
                 manifest = response.manifest;
                 etag = response.etag;
+                manifestUnchanged = samePack && sameManifest(previous, manifest);
                 LoaderLog.info("Resolved " + manifest.modpack.name + " build " + manifest.build.version);
             }
 
-            Collection<Long> requestedMemberships = initialMemberships(
-                manifest, previous, samePack && "client".equals(config.target));
-            if ("client".equals(config.target) && OptionalSelectionScreen.hasSelectableOptions(manifest)) {
+            boolean clientSide = "client".equals(config.target);
+            boolean reuseSelections = clientSide && canReuseSavedSelections(
+                manifest, previous, samePack && manifestUnchanged);
+            Collection<Long> requestedMemberships;
+            if (reuseSelections) {
+                requestedMemberships = new ArrayList<Long>(previous.selectedMemberships);
+                LoaderLog.info(
+                    "Manifest is unchanged; reusing saved optional selections");
+            } else {
+                requestedMemberships = initialMemberships(
+                    manifest, previous, samePack && clientSide);
+            }
+            if (clientSide && !reuseSelections &&
+                OptionalSelectionScreen.hasSelectableOptions(manifest)) {
                 if (OptionalSelectionScreen.isAvailable()) {
                     requestedMemberships = OptionalSelectionScreen.choose(manifest, requestedMemberships);
                 } else {
@@ -115,6 +128,35 @@ final class BootstrapEngine {
             throw new RecoverableBootstrapException(e.getMessage(), e);
         } catch (RuntimeException e) {
             throw new RecoverableBootstrapException("Could not prepare the modpack update", e);
+        }
+    }
+
+    static boolean sameManifest(InstalledState previous, BootstrapManifest current) {
+        return previous != null && current != null && previous.manifestHash != null &&
+            current.manifestHash != null &&
+            previous.manifestHash.equalsIgnoreCase(current.manifestHash) &&
+            previous.build != null && current.build != null &&
+            previous.build.equals(current.build.version);
+    }
+
+    static boolean canReuseSavedSelections(
+        BootstrapManifest manifest, InstalledState previous, boolean manifestUnchanged) {
+
+        if (!manifestUnchanged || previous == null || previous.manifest == null ||
+            previous.selectedMemberships == null) {
+            return false;
+        }
+        try {
+            SelectionResolver.resolve(manifest, previous.selectedMemberships);
+            return true;
+        } catch (LoaderException e) {
+            LoaderLog.warn(
+                "Saved optional choices are no longer valid; opening the selection screen");
+            return false;
+        } catch (RuntimeException e) {
+            LoaderLog.warn(
+                "Saved optional choices are invalid; opening the selection screen");
+            return false;
         }
     }
 

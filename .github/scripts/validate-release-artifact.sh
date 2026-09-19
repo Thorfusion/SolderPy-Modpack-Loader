@@ -31,8 +31,11 @@ require_entry() {
 }
 
 require_entry 'io/github/thorfusion/solderpyloader/SolderPyAgent.class'
+require_entry 'io/github/thorfusion/solderpyloader/BootstrapWorker.class'
 require_entry 'io/github/thorfusion/solderpyloader/SolderPyRelaunchProvider.class'
+require_entry 'io/github/thorfusion/solderpyloader/SolderPyJavaRuntimeProvider.class'
 require_entry 'META-INF/services/com.juanmuscaria.relauncher.CommandLineProvider'
+require_entry 'META-INF/services/com.juanmuscaria.relauncher.jvm.JavaRuntimeProvider'
 require_entry 'io/github/thorfusion/solderpyloader/internal/gson/Gson.class'
 require_entry 'io/github/thorfusion/solderpyloader/internal/compress/archivers/zip/ZipFile.class'
 require_entry 'io/github/thorfusion/solderpyloader/internal/io/IOUtils.class'
@@ -54,7 +57,8 @@ fi
     cd "$scratch"
     jar xf "$artifact" \
         META-INF/MANIFEST.MF \
-        META-INF/services/com.juanmuscaria.relauncher.CommandLineProvider
+        META-INF/services/com.juanmuscaria.relauncher.CommandLineProvider \
+        META-INF/services/com.juanmuscaria.relauncher.jvm.JavaRuntimeProvider
 )
 
 if ! tr -d '\r' < "$scratch/META-INF/MANIFEST.MF" |
@@ -73,6 +77,12 @@ fi
 if ! tr -d '\r' < "$scratch/META-INF/services/com.juanmuscaria.relauncher.CommandLineProvider" |
     grep -Fqx 'io.github.thorfusion.solderpyloader.SolderPyRelaunchProvider'; then
     echo 'The Relauncher service provider declaration is incorrect.' >&2
+    exit 1
+fi
+
+if ! tr -d '\r' < "$scratch/META-INF/services/com.juanmuscaria.relauncher.jvm.JavaRuntimeProvider" |
+    grep -Fqx 'io.github.thorfusion.solderpyloader.SolderPyJavaRuntimeProvider'; then
+    echo 'The Relauncher Java runtime provider declaration is incorrect.' >&2
     exit 1
 fi
 

@@ -14,7 +14,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -22,6 +25,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ParallelDownloadTest {
@@ -61,6 +68,78 @@ class ParallelDownloadTest {
         } finally {
             server.stop(0);
             serverWorkers.shutdownNow();
+        }
+    }
+
+    @Test
+    void reusesConnectionForSequentialDownloads() throws Exception {
+        byte[] first = "first-package".getBytes(StandardCharsets.UTF_8);
+        byte[] second = "second-package".getBytes(StandardCharsets.UTF_8);
+        Set<Integer> clientPorts = Collections.synchronizedSet(new HashSet<Integer>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/first.jar", exchange -> {
+            clientPorts.add(exchange.getRemoteAddress().getPort());
+            send(exchange, first);
+        });
+        server.createContext("/second.jar", exchange -> {
+            clientPorts.add(exchange.getRemoteAddress().getPort());
+            send(exchange, second);
+        });
+        server.start();
+        try {
+            int port = server.getAddress().getPort();
+            Path directory = gameDirectory.resolve("downloads");
+            DownloadManager downloads = new DownloadManager(1024L * 1024L);
+
+            DownloadManager.DownloadedFile firstFile = downloads.downloadVerified(
+                item("first", first, port, "mods/first.jar"), directory,
+                BootstrapProgress.console());
+            DownloadManager.DownloadedFile secondFile = downloads.downloadVerified(
+                item("second", second, port, "mods/second.jar"), directory,
+                BootstrapProgress.console());
+
+            assertArrayEquals(first, Files.readAllBytes(firstFile.path));
+            assertArrayEquals(second, Files.readAllBytes(secondFile.path));
+            assertEquals(1, clientPorts.size(),
+                "sequential downloads should share one persistent HTTP connection");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void checksMd5OnlyAfterNetworkDownloadCompletes() throws Exception {
+        byte[] content = "download-before-verification".getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/example.jar", exchange -> send(exchange, content));
+        server.start();
+        try {
+            BootstrapManifest.Package item = item(
+                "example", content, server.getAddress().getPort(), "mods/example.jar");
+            item.download.md5 = "00000000000000000000000000000000";
+            DownloadManager downloads = new DownloadManager(1024L * 1024L);
+
+            DownloadManager.DownloadedFile downloaded = downloads.downloadFile(
+                item, gameDirectory.resolve("downloads"), BootstrapProgress.console());
+
+            assertTrue(Files.isRegularFile(downloaded.path));
+            assertNull(downloaded.md5, "the network phase must not calculate MD5");
+            LoaderException failure = assertThrows(LoaderException.class,
+                () -> downloads.verifyDownloaded(item, downloaded, BootstrapProgress.console()));
+            assertTrue(failure.getMessage().contains("MD5 mismatch"));
+            assertFalse(Files.exists(downloaded.path),
+                "a failed verification must discard the untrusted download");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    private static void send(HttpExchange exchange, byte[] content) throws IOException {
+        exchange.sendResponseHeaders(200, content.length);
+        try (OutputStream output = exchange.getResponseBody()) {
+            output.write(content);
+        } finally {
+            exchange.close();
         }
     }
 
