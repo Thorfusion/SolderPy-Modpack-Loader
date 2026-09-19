@@ -21,8 +21,11 @@ override them.
 ## Requirements
 
 - Java 8 or newer at runtime (the build itself uses a Java 17+ toolchain).
-- `relauncher-universal-1.1.1.jar` and the built loader JAR in the top-level
-  `mods/` directory.
+- Relauncher 1.1.1 and the built loader JAR in the top-level `mods/` directory.
+  Modrinth and manual installations use the full
+  `relauncher-universal-1.1.1.jar`. CurseForge installs
+  `relauncher-universal-1.1.1-curseforge.jar`, which omits native libraries
+  and uses Relauncher's pure-Java fallback strategy.
 - A solder.py server exposing bootstrap schema version 1.
 
 Relauncher supports Forge 1.6.4+, NeoForge, Fabric, and Quilt. Its upstream
@@ -30,6 +33,10 @@ launcher matrix currently supports the vanilla, Prism, CurseForge, Modrinth,
 and ATLauncher launch paths. Technic Launcher V3 is **expected compatible,
 but not yet verified**. MultiMC's stdin launch protocol cannot be replayed and
 is not supported by Relauncher.
+
+The CurseForge dependency declaration points to the Relauncher project, whose
+main CurseForge file is its policy-compliant `-curseforge` edition. SolderPy
+Loader does not bundle Relauncher or any native libraries itself.
 
 ## Configuration
 

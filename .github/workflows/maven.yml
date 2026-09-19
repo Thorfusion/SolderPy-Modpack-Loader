@@ -163,6 +163,7 @@ jobs:
         with:
           curseforge-id: '1702825'
           curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+          # Relauncher's CurseForge project serves its native-free -curseforge edition.
           curseforge-dependencies: |
             1491728(required)
           files: output/${{ needs.build.outputs.artifact_name }}
