@@ -1,6 +1,7 @@
 package io.github.thorfusion.solderpyloader;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 
 import javax.swing.JCheckBox;
 import javax.swing.JButton;
@@ -11,6 +12,7 @@ import javax.swing.JViewport;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dimension;
+import java.awt.GraphicsEnvironment;
 import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -21,7 +23,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OptionalSelectionScreenLayoutTest {
     @Test
+    void basicPageCountDoesNotRequireSwing() {
+        assertEquals(1, OptionalSelectionScreen.basicPageCount(0));
+        assertEquals(1, OptionalSelectionScreen.basicPageCount(6));
+        assertEquals(2, OptionalSelectionScreen.basicPageCount(7));
+        assertEquals(4, OptionalSelectionScreen.basicPageCount(20));
+    }
+
+    @Test
     void basicOptionsAreSplitIntoBoundedScrollablePages() throws Exception {
+        requireGraphicalEnvironment();
         BootstrapManifest manifest = basicManifest(20);
         final JPanel[] pager = new JPanel[1];
 
@@ -37,6 +48,7 @@ class OptionalSelectionScreenLayoutTest {
 
     @Test
     void wrappedDescriptionsDoNotHideLaterBasicOptions() throws Exception {
+        requireGraphicalEnvironment();
         BootstrapManifest manifest = basicManifest(2);
         manifest.packages.get(0).prettyName = "Better Foliage";
         manifest.packages.get(0).description =
@@ -106,6 +118,11 @@ class OptionalSelectionScreenLayoutTest {
             manifest.packages.add(item);
         }
         return manifest;
+    }
+
+    private static void requireGraphicalEnvironment() {
+        Assumptions.assumeFalse(GraphicsEnvironment.isHeadless(),
+            "Swing layout assertions require a graphical environment");
     }
 
     private static int countComponents(Container root, Class<? extends Component> type) {

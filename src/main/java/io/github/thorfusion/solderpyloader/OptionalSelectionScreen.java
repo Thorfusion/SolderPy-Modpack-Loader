@@ -203,8 +203,7 @@ final class OptionalSelectionScreen {
             }
         }
 
-        final int pageCount = Math.max(1,
-            (options.size() + BASIC_OPTIONS_PER_PAGE - 1) / BASIC_OPTIONS_PER_PAGE);
+        final int pageCount = basicPageCount(options.size());
         final CardLayout pageLayout = new CardLayout();
         final JPanel pages = new JPanel(pageLayout);
         for (int page = 0; page < pageCount; page++) {
@@ -256,6 +255,12 @@ final class OptionalSelectionScreen {
             result.add(navigation, BorderLayout.SOUTH);
         }
         return result;
+    }
+
+    static int basicPageCount(int optionCount) {
+        return Math.max(1,
+            (Math.max(0, optionCount) + BASIC_OPTIONS_PER_PAGE - 1) /
+                BASIC_OPTIONS_PER_PAGE);
     }
 
     private static void showBasicPage(

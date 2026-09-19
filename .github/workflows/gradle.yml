@@ -92,6 +92,7 @@ jobs:
         run: ./gradlew --no-daemon --stacktrace clean check shadowJar
         env:
           BUILD_VER: ${{ steps.artifact.outputs.suffix }}
+          JAVA_TOOL_OPTIONS: -Djava.awt.headless=true
 
       - name: Validate packaged artifact
         shell: bash
