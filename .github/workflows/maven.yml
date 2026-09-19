@@ -137,11 +137,7 @@ jobs:
           version: ${{ needs.build.outputs.project_version }}
           version-type: ${{ github.event.release.prerelease && 'beta' || 'release' }}
           changelog: ${{ github.event.release.body }}
-          loaders: |
-            forge
-            neoforge
-            fabric
-            quilt
+          modrinth-loaders: java-agent
           game-versions: '>=1.6.4'
           game-version-filter: releases
           java: '8'
