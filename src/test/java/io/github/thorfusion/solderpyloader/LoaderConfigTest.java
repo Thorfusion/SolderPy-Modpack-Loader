@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -27,10 +28,80 @@ class LoaderConfigTest {
         assertEquals("http://127.0.0.1:8080/api/", config.api);
         assertEquals("recommended", config.build);
         assertEquals("auto", config.target);
+        assertEquals("hybrid", config.source);
+        assertEquals(null, config.platform);
         assertEquals(25, config.bootstrapJavaMajor);
         assertEquals(4, config.limits.maxConcurrentDownloads);
         assertEquals(1, config.limits.maxConcurrentExtractions);
         assertTrue(config.enabled);
+    }
+
+    @Test
+    void acceptsExportSourceAndPlatform() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"source\":\"solder\"," +
+            "\"platform\":\"modrinth\"}").getBytes(StandardCharsets.UTF_8));
+
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        assertEquals("solder", config.source);
+        assertEquals("modrinth", config.platform);
+    }
+
+    @Test
+    void acceptsTechnicAsNativeDeliveryPlatform() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"platform\":\"technic\"}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        assertEquals("technic", config.platform);
+    }
+
+    @Test
+    void rejectsUnknownExportSource() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"source\":\"mirror\"}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(LoaderException.class, () -> LoaderConfig.load(configFile));
+    }
+
+    @Test
+    void rejectsUnknownNativeDeliveryPlatform() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"platform\":\"unknown\"}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(LoaderException.class, () -> LoaderConfig.load(configFile));
+    }
+
+    @Test
+    void cachedStateMustMatchTheConfiguredSourceAndPlatform() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"target\":\"client\"," +
+            "\"source\":\"hybrid\",\"platform\":\"technic\"}")
+            .getBytes(StandardCharsets.UTF_8));
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        InstalledState state = new InstalledState();
+        state.api = config.api;
+        state.modpack = config.modpack;
+        state.target = config.target;
+        state.source = config.source;
+        state.platform = config.platform;
+        state.manifest = new BootstrapManifest();
+        state.manifest.source = "hybrid";
+
+        assertTrue(state.matches(config));
+        state.manifest.source = "solder";
+        assertFalse(state.matches(config));
     }
 
     @Test

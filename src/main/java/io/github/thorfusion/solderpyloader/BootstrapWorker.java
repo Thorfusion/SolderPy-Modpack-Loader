@@ -113,7 +113,7 @@ public final class BootstrapWorker {
                 state.selectedMemberships == null) {
                 return false;
             }
-            state.manifest.validate(config.modpack, config.target);
+            state.manifest.validate(config.modpack, config.target, config.source);
             List<BootstrapManifest.Package> selected =
                 SelectionResolver.resolve(state.manifest, state.selectedMemberships);
             Installer installer = new Installer(

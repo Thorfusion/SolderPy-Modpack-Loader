@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BootstrapIntegrationTest {
@@ -39,7 +40,8 @@ class BootstrapIntegrationTest {
         try {
             Path configFile = gameDirectory.resolve("loader.json");
             String configJson = "{\"api\":\"http://127.0.0.1:" + port +
-                "/api/\",\"modpack\":\"pack\"}";
+                "/api/\",\"modpack\":\"pack\",\"source\":\"hybrid\"," +
+                "\"platform\":\"modrinth\"}";
             Files.write(configFile, configJson.getBytes(StandardCharsets.UTF_8));
             LoaderConfig config = LoaderConfig.load(configFile);
             config.resolveTarget("client");
@@ -49,6 +51,9 @@ class BootstrapIntegrationTest {
             BootstrapClient.ManifestResponse response = client.fetchManifest(null, null);
             assertEquals("1.0", response.manifest.build.version);
             assertEquals("\"fixture-etag\"", response.etag);
+            assertEquals(
+                "target=client&source=hybrid&platform=modrinth",
+                fixture.manifestQuery);
 
             InstalledState next = new InstalledState();
             Path data = gameDirectory.resolve(".solderpy-loader");
@@ -96,6 +101,25 @@ class BootstrapIntegrationTest {
         }
     }
 
+    @Test
+    void rejectsAManifestForADifferentDownloadSource() throws Exception {
+        BootstrapManifest manifest = manifest(1234, new byte[] {1});
+        manifest.source = "solder";
+
+        assertThrows(LoaderException.class,
+            () -> manifest.validate("pack", "client", "hybrid"));
+    }
+
+    @Test
+    void treatsAnOlderSchemaOneManifestAsHybrid() throws Exception {
+        BootstrapManifest manifest = manifest(1234, new byte[] {1});
+        manifest.source = null;
+
+        manifest.validate("pack", "client", "hybrid");
+
+        assertEquals("hybrid", manifest.source);
+    }
+
     private static BootstrapManifest manifest(int port, byte[] jarBytes) throws Exception {
         BootstrapManifest manifest = new BootstrapManifest();
         manifest.schema = "solder.py/bootstrap";
@@ -106,6 +130,7 @@ class BootstrapIntegrationTest {
         manifest.build = new BootstrapManifest.Build();
         manifest.build.version = "1.0";
         manifest.target = "client";
+        manifest.source = "hybrid";
         manifest.optionalMode = new BootstrapManifest.OptionalMode();
         manifest.optionalMode.name = "basic";
         manifest.selectionPolicy = new BootstrapManifest.SelectionPolicy();
@@ -150,6 +175,7 @@ class BootstrapIntegrationTest {
         private final byte[] jar;
         private final byte[] manifest;
         private final AtomicInteger fileRequests = new AtomicInteger();
+        private String manifestQuery;
 
         private FixtureHandler(byte[] jar, byte[] manifest) {
             this.jar = jar;
@@ -164,6 +190,7 @@ class BootstrapIntegrationTest {
                     "{\"capabilities\":{\"bootstrap_manifest\":true,\"bootstrap_schema\":1}}"
                         .getBytes(StandardCharsets.UTF_8));
             } else if ("/api/modpack/pack/recommended/bootstrap".equals(path)) {
+                manifestQuery = exchange.getRequestURI().getRawQuery();
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.getResponseHeaders().set("ETag", "\"fixture-etag\"");
                 send(exchange, 200, "application/json", manifest);

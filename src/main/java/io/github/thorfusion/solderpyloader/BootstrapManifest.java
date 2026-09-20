@@ -15,6 +15,7 @@ final class BootstrapManifest {
     Modpack modpack;
     Build build;
     String target;
+    String source;
     @SerializedName("optional_mode") OptionalMode optionalMode;
     @SerializedName("selection_policy") SelectionPolicy selectionPolicy;
     List<Group> groups = new ArrayList<Group>();
@@ -115,7 +116,8 @@ final class BootstrapManifest {
         String version;
     }
 
-    void validate(String expectedModpack, String expectedTarget) throws LoaderException {
+    void validate(String expectedModpack, String expectedTarget, String expectedSource)
+        throws LoaderException {
         if (!"solder.py/bootstrap".equals(schema)) {
             throw new LoaderException("Server returned an unsupported bootstrap schema: " + schema);
         }
@@ -130,6 +132,15 @@ final class BootstrapManifest {
         }
         if (!expectedTarget.equals(target)) {
             throw new LoaderException("Bootstrap manifest target does not match the configuration");
+        }
+        // Early schema-1 servers predate the explicit source response field and
+        // behaved like today's hybrid mode. Keep that default compatible while
+        // still refusing a server that cannot confirm an explicit solder mode.
+        if (isBlank(source)) {
+            source = "hybrid";
+        }
+        if (!expectedSource.equals(source)) {
+            throw new LoaderException("Bootstrap manifest source does not match the configuration");
         }
         if (optionalMode == null ||
             !("basic".equals(optionalMode.name) || "advanced".equals(optionalMode.name))) {

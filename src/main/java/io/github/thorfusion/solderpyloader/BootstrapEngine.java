@@ -8,8 +8,11 @@ import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 final class BootstrapEngine {
@@ -50,11 +53,15 @@ final class BootstrapEngine {
         next.api = config.api;
         next.modpack = config.modpack;
         next.target = config.target;
+        next.source = config.source;
+        next.platform = config.platform;
         next.build = plan.manifest.build.version;
         next.manifestHash = plan.manifest.manifestHash;
         next.etag = plan.etag;
         next.manifest = plan.manifest;
         next.selectedMemberships = new ArrayList<Long>(plan.requestedMemberships);
+        next.selectedOptions = rememberedSelections(
+            plan.manifest, plan.requestedMemberships);
 
         BootstrapProgress progress = BootstrapProgress.create(
             "client".equals(config.target) && OptionalSelectionScreen.isAvailable());
@@ -87,7 +94,7 @@ final class BootstrapEngine {
                     throw new LoaderException("Server returned 304 but no cached manifest is available");
                 }
                 manifest = previous.manifest;
-                manifest.validate(config.modpack, config.target);
+                manifest.validate(config.modpack, config.target, config.source);
                 etag = previous.etag;
                 manifestUnchanged = true;
             } else {
@@ -170,15 +177,20 @@ final class BootstrapEngine {
         }
 
         try {
-            Set<Long> existingOptions = OptionalSelectionScreen.selectableMemberships(manifest);
-            existingOptions.retainAll(
-                OptionalSelectionScreen.selectableMemberships(previous.manifest));
-            Set<Long> saved = new LinkedHashSet<Long>(previous.selectedMemberships);
-            for (Long membership : existingOptions) {
-                if (saved.contains(membership)) {
-                    initial.add(membership);
+            Map<OptionKey, Boolean> savedChoices = savedChoices(previous);
+            Set<Long> currentOptions = OptionalSelectionScreen.selectableMemberships(manifest);
+            for (BootstrapManifest.Package item : manifest.packages) {
+                if (!currentOptions.contains(item.membershipId)) {
+                    continue;
+                }
+                Boolean selected = savedChoices.get(OptionKey.of(item));
+                if (selected == null) {
+                    continue;
+                }
+                if (selected.booleanValue()) {
+                    initial.add(item.membershipId);
                 } else {
-                    initial.remove(membership);
+                    initial.remove(item.membershipId);
                 }
             }
             SelectionResolver.resolve(manifest, initial);
@@ -189,6 +201,84 @@ final class BootstrapEngine {
         } catch (RuntimeException e) {
             LoaderLog.warn("Saved optional choices are invalid; using API defaults");
             return new LinkedHashSet<Long>(manifest.selectionPolicy.defaultMemberships);
+        }
+    }
+
+    static List<InstalledState.RememberedSelection> rememberedSelections(
+        BootstrapManifest manifest, Collection<Long> selectedMemberships) {
+
+        Set<Long> selectable = OptionalSelectionScreen.selectableMemberships(manifest);
+        Set<Long> selected = new LinkedHashSet<Long>(selectedMemberships);
+        List<InstalledState.RememberedSelection> result =
+            new ArrayList<InstalledState.RememberedSelection>();
+        for (BootstrapManifest.Package item : manifest.packages) {
+            if (selectable.contains(item.membershipId) && selected.contains(item.membershipId)) {
+                result.add(new InstalledState.RememberedSelection(
+                    item.selection.groupKey, item.name));
+            }
+        }
+        return result;
+    }
+
+    private static Map<OptionKey, Boolean> savedChoices(InstalledState previous) {
+        Map<OptionKey, Boolean> result = new LinkedHashMap<OptionKey, Boolean>();
+        Set<Long> previousOptions =
+            OptionalSelectionScreen.selectableMemberships(previous.manifest);
+
+        if (previous.selectedOptions == null) {
+            Set<Long> selected = new LinkedHashSet<Long>(previous.selectedMemberships);
+            for (BootstrapManifest.Package item : previous.manifest.packages) {
+                if (previousOptions.contains(item.membershipId)) {
+                    result.put(OptionKey.of(item), selected.contains(item.membershipId));
+                }
+            }
+            return result;
+        }
+
+        Set<OptionKey> selected = new LinkedHashSet<OptionKey>();
+        for (InstalledState.RememberedSelection remembered : previous.selectedOptions) {
+            if (remembered != null && remembered.packageName != null) {
+                selected.add(new OptionKey(remembered.groupKey, remembered.packageName));
+            }
+        }
+        for (BootstrapManifest.Package item : previous.manifest.packages) {
+            if (previousOptions.contains(item.membershipId)) {
+                OptionKey key = OptionKey.of(item);
+                result.put(key, selected.contains(key));
+            }
+        }
+        return result;
+    }
+
+    private static final class OptionKey {
+        private final String groupKey;
+        private final String packageName;
+
+        private OptionKey(String groupKey, String packageName) {
+            this.groupKey = groupKey;
+            this.packageName = packageName;
+        }
+
+        private static OptionKey of(BootstrapManifest.Package item) {
+            return new OptionKey(item.selection.groupKey, item.name);
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (!(other instanceof OptionKey)) {
+                return false;
+            }
+            OptionKey key = (OptionKey) other;
+            return Objects.equals(groupKey, key.groupKey) &&
+                Objects.equals(packageName, key.packageName);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(groupKey, packageName);
         }
     }
 

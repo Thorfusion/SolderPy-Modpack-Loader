@@ -50,7 +50,11 @@ final class BootstrapClient {
         StringBuilder url = new StringBuilder(config.apiUri.toASCIIString());
         url.append("modpack/").append(encode(config.modpack))
             .append('/').append(encode(config.build)).append("/bootstrap")
-            .append("?target=").append(encode(config.target));
+            .append("?target=").append(encode(config.target))
+            .append("&source=").append(encode(config.source));
+        if (config.platform != null) {
+            url.append("&platform=").append(encode(config.platform));
+        }
         if (installedBuild != null && !installedBuild.isEmpty()) {
             url.append("&from=").append(encode(installedBuild));
         }
@@ -70,7 +74,7 @@ final class BootstrapClient {
             if (manifest == null) {
                 throw new LoaderException("Bootstrap manifest response is empty");
             }
-            manifest.validate(config.modpack, config.target);
+            manifest.validate(config.modpack, config.target, config.source);
             return ManifestResponse.modified(manifest, validEtag(response.etag));
         } catch (JsonParseException e) {
             throw new LoaderException("Bootstrap manifest returned invalid JSON", e);

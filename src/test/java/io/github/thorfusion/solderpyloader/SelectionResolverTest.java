@@ -134,6 +134,55 @@ class SelectionResolverTest {
     }
 
     @Test
+    void optionalChoicesSurviveClonedBuildMembershipIds() {
+        BootstrapManifest previousManifest = manifest();
+        InstalledState previous = new InstalledState();
+        previous.manifest = previousManifest;
+        previous.selectedMemberships = Arrays.asList(11L, 13L);
+
+        BootstrapManifest current = manifest();
+        current.selectionPolicy.requiredMemberships = Collections.singletonList(21L);
+        current.selectionPolicy.defaultMemberships = Arrays.asList(21L, 22L);
+        current.packages.get(0).membershipId = 21L;
+        current.packages.get(1).membershipId = 22L;
+        current.packages.get(2).membershipId = 23L;
+        current.groups.get(0).choices.get(0).membershipId = 22L;
+        current.groups.get(0).choices.get(1).membershipId = 23L;
+        current.packages.get(1).dependencies.get(0).membershipId = 21L;
+        current.packages.get(2).dependencies.get(0).membershipId = 21L;
+
+        assertEquals(new LinkedHashSet<Long>(Arrays.asList(21L, 23L)),
+            new LinkedHashSet<Long>(
+                BootstrapEngine.initialMemberships(current, previous, true)));
+    }
+
+    @Test
+    void stableRememberedSelectionsTakePrecedenceOverOldMembershipIds() {
+        BootstrapManifest previousManifest = manifest();
+        InstalledState previous = new InstalledState();
+        previous.manifest = previousManifest;
+        previous.selectedMemberships = Arrays.asList(11L, 12L);
+        previous.selectedOptions = Collections.singletonList(
+            new InstalledState.RememberedSelection("World style", "fast-world"));
+
+        BootstrapManifest current = manifest();
+
+        assertEquals(new LinkedHashSet<Long>(Arrays.asList(11L, 13L)),
+            new LinkedHashSet<Long>(
+                BootstrapEngine.initialMemberships(current, previous, true)));
+    }
+
+    @Test
+    void remembersSelectedOptionsByGroupAndSlug() {
+        List<InstalledState.RememberedSelection> remembered =
+            BootstrapEngine.rememberedSelections(manifest(), Arrays.asList(11L, 13L));
+
+        assertEquals(1, remembered.size());
+        assertEquals("World style", remembered.get(0).groupKey);
+        assertEquals("fast-world", remembered.get(0).packageName);
+    }
+
+    @Test
     void serverSelectionAlwaysStartsFromApiDefaults() {
         BootstrapManifest current = manifest();
         InstalledState previous = new InstalledState();

@@ -14,18 +14,35 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 final class InstalledState {
     int version = 1;
     String api;
     String modpack;
     String target;
+    String source;
+    String platform;
     String build;
     String manifestHash;
     String etag;
     BootstrapManifest manifest;
     List<Long> selectedMemberships;
+    List<RememberedSelection> selectedOptions;
     Map<String, Receipt> receipts = new LinkedHashMap<String, Receipt>();
+
+    static final class RememberedSelection {
+        String groupKey;
+        String packageName;
+
+        RememberedSelection() {
+        }
+
+        RememberedSelection(String groupKey, String packageName) {
+            this.groupKey = groupKey;
+            this.packageName = packageName;
+        }
+    }
 
     static final class Receipt {
         String slug;
@@ -108,6 +125,9 @@ final class InstalledState {
     }
 
     boolean matches(LoaderConfig config) {
-        return config.api.equals(api) && config.modpack.equals(modpack) && config.target.equals(target);
+        return config.api.equals(api) && config.modpack.equals(modpack) &&
+            config.target.equals(target) && Objects.equals(config.source, source) &&
+            Objects.equals(config.platform, platform) && manifest != null &&
+            Objects.equals(config.source, manifest.source);
     }
 }

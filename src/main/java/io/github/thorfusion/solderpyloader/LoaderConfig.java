@@ -27,6 +27,8 @@ final class LoaderConfig {
     String modpack;
     String build = "recommended";
     String target = "auto";
+    String source = "hybrid";
+    String platform;
     String clientId;
     String bootstrapJava;
     Integer bootstrapJavaMajor = DEFAULT_BOOTSTRAP_JAVA_MAJOR;
@@ -87,11 +89,24 @@ final class LoaderConfig {
         modpack = modpack.trim();
         build = build.trim();
         target = target.trim().toLowerCase(Locale.ROOT);
+        source = source == null ? "hybrid" : source.trim().toLowerCase(Locale.ROOT);
+        platform = platform == null ? null : platform.trim().toLowerCase(Locale.ROOT);
         if (!modpack.matches("[A-Za-z0-9_-]+")) {
             throw new LoaderException("modpack must be a Solder slug containing letters, digits, '_' or '-'");
         }
         if (!"auto".equals(target) && !"client".equals(target) && !"server".equals(target)) {
             throw new LoaderException("target must be auto, client, or server");
+        }
+        if (!"hybrid".equals(source) && !"solder".equals(source)) {
+            throw new LoaderException("source must be hybrid or solder");
+        }
+        if (platform != null && platform.isEmpty()) {
+            platform = null;
+        }
+        if (platform != null && !"modrinth".equals(platform) &&
+            !"curseforge".equals(platform) && !"prism".equals(platform) &&
+            !"technic".equals(platform)) {
+            throw new LoaderException("platform must be modrinth, curseforge, prism, or technic");
         }
         if (clientId != null && clientId.trim().isEmpty()) {
             clientId = null;
