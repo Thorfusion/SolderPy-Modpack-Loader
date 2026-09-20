@@ -10,7 +10,12 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 final class LoaderConfig {
     static final long DEFAULT_MAX_DOWNLOAD_BYTES = 512L * 1024L * 1024L;
@@ -29,6 +34,7 @@ final class LoaderConfig {
     String target = "auto";
     String source = "hybrid";
     String platform;
+    List<Long> launcherOwnedMemberships;
     String clientId;
     String bootstrapJava;
     Integer bootstrapJavaMajor = DEFAULT_BOOTSTRAP_JAVA_MAJOR;
@@ -107,6 +113,21 @@ final class LoaderConfig {
             !"curseforge".equals(platform) && !"prism".equals(platform) &&
             !"technic".equals(platform)) {
             throw new LoaderException("platform must be modrinth, curseforge, prism, or technic");
+        }
+        if (launcherOwnedMemberships != null) {
+            if (launcherOwnedMemberships.size() > 100_000) {
+                throw new LoaderException("launcherOwnedMemberships contains too many entries");
+            }
+            Set<Long> unique = new LinkedHashSet<Long>();
+            for (Long membership : launcherOwnedMemberships) {
+                if (membership == null || membership.longValue() <= 0) {
+                    throw new LoaderException(
+                        "launcherOwnedMemberships contains an invalid membership ID");
+                }
+                unique.add(membership);
+            }
+            launcherOwnedMemberships = new ArrayList<Long>(unique);
+            Collections.sort(launcherOwnedMemberships);
         }
         if (clientId != null && clientId.trim().isEmpty()) {
             clientId = null;

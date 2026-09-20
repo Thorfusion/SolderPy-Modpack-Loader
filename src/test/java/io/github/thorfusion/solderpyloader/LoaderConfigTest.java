@@ -50,6 +50,30 @@ class LoaderConfigTest {
     }
 
     @Test
+    void acceptsAndNormalizesExplicitLauncherOwnership() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"platform\":\"modrinth\"," +
+            "\"launcherOwnedMemberships\":[9,2,9]}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        assertEquals(java.util.Arrays.asList(2L, 9L),
+            config.launcherOwnedMemberships);
+    }
+
+    @Test
+    void rejectsInvalidExplicitLauncherOwnership() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"launcherOwnedMemberships\":[0]}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        assertThrows(LoaderException.class, () -> LoaderConfig.load(configFile));
+    }
+
+    @Test
     void acceptsTechnicAsNativeDeliveryPlatform() throws Exception {
         Path configFile = temporary.resolve("loader.json");
         Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
@@ -101,6 +125,30 @@ class LoaderConfigTest {
 
         assertTrue(state.matches(config));
         state.manifest.source = "solder";
+        assertFalse(state.matches(config));
+    }
+
+    @Test
+    void cachedStateMustMatchExplicitLauncherOwnership() throws Exception {
+        Path configFile = temporary.resolve("loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"target\":\"client\"," +
+            "\"launcherOwnedMemberships\":[2,9]}")
+            .getBytes(StandardCharsets.UTF_8));
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        InstalledState state = new InstalledState();
+        state.api = config.api;
+        state.modpack = config.modpack;
+        state.target = config.target;
+        state.source = config.source;
+        state.platform = config.platform;
+        state.manifest = new BootstrapManifest();
+        state.manifest.source = config.source;
+        state.launcherOwnedMemberships = java.util.Arrays.asList(2L, 9L);
+
+        assertTrue(state.matches(config));
+        state.launcherOwnedMemberships = java.util.Collections.singletonList(2L);
         assertFalse(state.matches(config));
     }
 

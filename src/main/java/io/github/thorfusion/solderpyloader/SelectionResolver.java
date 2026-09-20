@@ -31,8 +31,8 @@ final class SelectionResolver {
         }
 
         Set<Long> selected = new LinkedHashSet<Long>();
-        selected.addAll(manifest.selectionPolicy.requiredMemberships);
-        selected.addAll(requestedMemberships);
+        addLoaderOwned(selected, manifest.selectionPolicy.requiredMemberships, byMembership);
+        addLoaderOwned(selected, requestedMemberships, byMembership);
 
         closeDependencies(selected, byMembership);
         enforceGroups(manifest.groups, selected);
@@ -46,13 +46,43 @@ final class SelectionResolver {
         return result;
     }
 
+    private static void addLoaderOwned(
+        Set<Long> selected,
+        Collection<Long> memberships,
+        Map<Long, BootstrapManifest.Package> byMembership) throws LoaderException {
+
+        for (Long membership : memberships) {
+            BootstrapManifest.Package item = byMembership.get(membership);
+            if (item == null) {
+                throw new LoaderException("The manifest selected an unknown package membership");
+            }
+            if (item.bootstrapManaged) {
+                selected.add(membership);
+            }
+        }
+    }
+
     private static void closeDependencies(
         Set<Long> selected,
         Map<Long, BootstrapManifest.Package> byMembership) throws LoaderException {
 
+        // Native packages are installed by the launcher, but their required
+        // Loader-owned dependencies must still be included in our plan.
+        // Start from both ownership sets and traverse launcher-owned nodes as
+        // part of the dependency graph without adding them to the install set.
         Queue<Long> pending = new ArrayDeque<Long>(selected);
+        for (BootstrapManifest.Package item : byMembership.values()) {
+            if ("launcher".equals(item.installOwner)) {
+                pending.add(item.membershipId);
+            }
+        }
+        Set<Long> visited = new LinkedHashSet<Long>();
         while (!pending.isEmpty()) {
-            BootstrapManifest.Package item = byMembership.get(pending.remove());
+            Long membership = pending.remove();
+            if (!visited.add(membership)) {
+                continue;
+            }
+            BootstrapManifest.Package item = byMembership.get(membership);
             if (item == null) {
                 throw new LoaderException("The manifest selected an unknown package membership");
             }
@@ -60,12 +90,16 @@ final class SelectionResolver {
                 if (!dependency.required) {
                     continue;
                 }
-                if (!dependency.present || dependency.membershipId == null ||
-                    !byMembership.containsKey(dependency.membershipId)) {
+                BootstrapManifest.Package dependencyItem = dependency.membershipId == null
+                    ? null : byMembership.get(dependency.membershipId);
+                if (!dependency.present || dependencyItem == null) {
                     throw new LoaderException("Package " + item.name +
                         " requires unavailable dependency " + dependency.name);
                 }
-                if (selected.add(dependency.membershipId)) {
+                if (dependencyItem.bootstrapManaged) {
+                    selected.add(dependency.membershipId);
+                    pending.add(dependency.membershipId);
+                } else if ("launcher".equals(dependencyItem.installOwner)) {
                     pending.add(dependency.membershipId);
                 }
             }

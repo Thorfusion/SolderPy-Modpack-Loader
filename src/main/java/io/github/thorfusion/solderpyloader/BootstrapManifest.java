@@ -78,6 +78,7 @@ final class BootstrapManifest {
         String version;
         String type;
         String modtype;
+        @SerializedName("install_owner") String installOwner;
         @SerializedName("bootstrap_managed") boolean bootstrapManaged;
         Download download;
         Selection selection;
@@ -172,6 +173,16 @@ final class BootstrapManifest {
             if (item.dependencies == null) {
                 item.dependencies = new ArrayList<Dependency>();
             }
+            if (isBlank(item.installOwner)) {
+                // Compatibility with early schema-1 manifests.
+                item.installOwner = item.bootstrapManaged ? "loader" : "ignored";
+            }
+            if (!("loader".equals(item.installOwner) ||
+                "launcher".equals(item.installOwner) ||
+                "ignored".equals(item.installOwner))) {
+                throw new LoaderException("Package " + item.name + " has an invalid install owner");
+            }
+            item.bootstrapManaged = "loader".equals(item.installOwner);
             if (item.bootstrapManaged) {
                 validateDownload(item);
             }
@@ -205,9 +216,58 @@ final class BootstrapManifest {
                 Package item = choice == null ? null : memberships.get(choice.membershipId);
                 if (item == null || !item.name.equals(choice.slug) || !choiceSlugs.add(choice.slug) ||
                     !groupedMemberships.add(choice.membershipId) || item.selection == null ||
-                    !group.key.equals(item.selection.groupKey)) {
+                    !group.key.equals(item.selection.groupKey) || !item.bootstrapManaged) {
                     throw new LoaderException("Optional group '" + group.key + "' has an invalid choice");
                 }
+            }
+        }
+    }
+
+    void applyConfiguredOwnership(List<Long> launcherMemberships)
+        throws LoaderException {
+        if (launcherMemberships == null) {
+            return;
+        }
+
+        Map<Long, Package> memberships = new LinkedHashMap<Long, Package>();
+        Set<Long> groupedMemberships = new HashSet<Long>();
+        for (Package item : packages) {
+            memberships.put(item.membershipId, item);
+        }
+        for (Group group : groups) {
+            for (Choice choice : group.choices) {
+                groupedMemberships.add(choice.membershipId);
+            }
+        }
+
+        Set<Long> configured = new HashSet<Long>();
+        for (Long membership : launcherMemberships) {
+            Package item = memberships.get(membership);
+            if (item == null) {
+                throw new LoaderException(
+                    "The export owns a package that is absent from this build");
+            }
+            if (groupedMemberships.contains(membership)) {
+                throw new LoaderException(
+                    "The export cannot own an advanced optional package");
+            }
+            if ("ignored".equals(item.installOwner)) {
+                throw new LoaderException(
+                    "The export cannot own an ignored package");
+            }
+            configured.add(membership);
+        }
+
+        for (Package item : packages) {
+            if ("ignored".equals(item.installOwner)) {
+                item.bootstrapManaged = false;
+                continue;
+            }
+            item.installOwner = configured.contains(item.membershipId)
+                ? "launcher" : "loader";
+            item.bootstrapManaged = "loader".equals(item.installOwner);
+            if (item.bootstrapManaged) {
+                validateDownload(item);
             }
         }
     }

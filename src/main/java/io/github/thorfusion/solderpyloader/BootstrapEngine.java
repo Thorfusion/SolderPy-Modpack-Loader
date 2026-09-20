@@ -55,6 +55,8 @@ final class BootstrapEngine {
         next.target = config.target;
         next.source = config.source;
         next.platform = config.platform;
+        next.launcherOwnedMemberships = config.launcherOwnedMemberships == null
+            ? null : new ArrayList<Long>(config.launcherOwnedMemberships);
         next.build = plan.manifest.build.version;
         next.manifestHash = plan.manifest.manifestHash;
         next.etag = plan.etag;
@@ -69,7 +71,8 @@ final class BootstrapEngine {
             Installer installer = new Installer(
                 paths.gameDirectory(), paths.dataDirectory(), config.limits,
                 paths.loaderJar(), progress);
-            installer.reconcile(plan.selected, previous, next);
+            installer.reconcile(
+                plan.selected, plan.manifest.packages, previous, next);
         } finally {
             progress.close();
         }
@@ -103,6 +106,7 @@ final class BootstrapEngine {
                 manifestUnchanged = samePack && sameManifest(previous, manifest);
                 LoaderLog.info("Resolved " + manifest.modpack.name + " build " + manifest.build.version);
             }
+            manifest.applyConfiguredOwnership(config.launcherOwnedMemberships);
 
             boolean clientSide = "client".equals(config.target);
             boolean reuseSelections = clientSide && canReuseSavedSelections(

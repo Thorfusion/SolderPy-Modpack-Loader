@@ -55,6 +55,9 @@ final class BootstrapClient {
         if (config.platform != null) {
             url.append("&platform=").append(encode(config.platform));
         }
+        if (config.launcherOwnedMemberships != null) {
+            url.append("&ownership=explicit");
+        }
         if (installedBuild != null && !installedBuild.isEmpty()) {
             url.append("&from=").append(encode(installedBuild));
         }

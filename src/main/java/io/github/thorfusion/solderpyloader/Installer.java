@@ -94,6 +94,15 @@ final class Installer {
         InstalledState previous,
         InstalledState next) throws LoaderException {
 
+        reconcile(selected, selected, previous, next);
+    }
+
+    void reconcile(
+        List<BootstrapManifest.Package> selected,
+        List<BootstrapManifest.Package> allPackages,
+        InstalledState previous,
+        InstalledState next) throws LoaderException {
+
         Path transaction = dataDirectory.resolve("staging-" + UUID.randomUUID().toString());
         Path content = transaction.resolve("content");
         Path downloadDirectory = transaction.resolve("downloads");
@@ -106,6 +115,12 @@ final class Installer {
             Set<String> stagedPaths = new LinkedHashSet<String>();
             Map<String, InstalledState.Receipt> receipts =
                 new LinkedHashMap<String, InstalledState.Receipt>();
+            Set<String> externallyOwnedPackages = new LinkedHashSet<String>();
+            for (BootstrapManifest.Package item : allPackages) {
+                if (!item.bootstrapManaged) {
+                    externallyOwnedPackages.add(item.name);
+                }
+            }
             Set<String> reusablePackages = new LinkedHashSet<String>();
             List<BootstrapManifest.Package> pendingDownloads =
                 new ArrayList<BootstrapManifest.Package>();
@@ -188,11 +203,17 @@ final class Installer {
                 if (receipt == null || receipt.files == null) {
                     continue;
                 }
+                if (externallyOwnedPackages.contains(receipt.slug)) {
+                    LoaderLog.info("Relinquishing package " + receipt.slug +
+                        " to its declared install owner");
+                    continue;
+                }
                 for (String oldPath : receipt.files) {
                     String normalized = PathSafety.normalizeRelative(oldPath, false);
                     validateOutput(normalized);
                     String desired = desiredPaths.get(PathSafety.collisionKey(normalized));
-                    if (desired == null || !desired.equals(normalized)) {
+                    if ((desired == null || !desired.equals(normalized)) &&
+                        canRemoveOwnedFile(receipt, normalized)) {
                         removals.add(normalized);
                     }
                 }
@@ -212,6 +233,27 @@ final class Installer {
         } finally {
             deleteTreeQuietly(transaction);
         }
+    }
+
+    private boolean canRemoveOwnedFile(
+        InstalledState.Receipt receipt, String relative) throws LoaderException {
+
+        PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
+        Path existing = PathSafety.resolve(gameDirectory, relative);
+        if (!Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) {
+            return false;
+        }
+        String expected = receipt.hashes == null ? null : receipt.hashes.get(relative);
+        if (!Files.isRegularFile(existing, LinkOption.NOFOLLOW_LINKS) ||
+            expected == null || !expected.matches("[0-9a-fA-F]{32}")) {
+            LoaderLog.warn("Preserving unverified former Loader output " + relative);
+            return false;
+        }
+        if (!expected.equalsIgnoreCase(md5(existing))) {
+            LoaderLog.warn("Preserving locally modified Loader output " + relative);
+            return false;
+        }
+        return true;
     }
 
     private boolean isReusable(

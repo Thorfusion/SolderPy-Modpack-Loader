@@ -41,7 +41,8 @@ class BootstrapIntegrationTest {
             Path configFile = gameDirectory.resolve("loader.json");
             String configJson = "{\"api\":\"http://127.0.0.1:" + port +
                 "/api/\",\"modpack\":\"pack\",\"source\":\"hybrid\"," +
-                "\"platform\":\"modrinth\"}";
+                "\"platform\":\"modrinth\"," +
+                "\"launcherOwnedMemberships\":[2]}";
             Files.write(configFile, configJson.getBytes(StandardCharsets.UTF_8));
             LoaderConfig config = LoaderConfig.load(configFile);
             config.resolveTarget("client");
@@ -52,7 +53,7 @@ class BootstrapIntegrationTest {
             assertEquals("1.0", response.manifest.build.version);
             assertEquals("\"fixture-etag\"", response.etag);
             assertEquals(
-                "target=client&source=hybrid&platform=modrinth",
+                "target=client&source=hybrid&platform=modrinth&ownership=explicit",
                 fixture.manifestQuery);
 
             InstalledState next = new InstalledState();
@@ -118,6 +119,26 @@ class BootstrapIntegrationTest {
         manifest.validate("pack", "client", "hybrid");
 
         assertEquals("hybrid", manifest.source);
+    }
+
+    @Test
+    void rejectsAnUnknownPackageInstallOwner() throws Exception {
+        BootstrapManifest manifest = manifest(1234, new byte[] {1});
+        manifest.packages.get(0).installOwner = "someone-else";
+
+        assertThrows(LoaderException.class,
+            () -> manifest.validate("pack", "client", "hybrid"));
+    }
+
+    @Test
+    void derivesInstallOwnerForAnOlderSchemaOneManifest() throws Exception {
+        BootstrapManifest manifest = manifest(1234, new byte[] {1});
+        manifest.packages.get(0).installOwner = null;
+
+        manifest.validate("pack", "client", "hybrid");
+
+        assertEquals("loader", manifest.packages.get(0).installOwner);
+        assertTrue(manifest.packages.get(0).bootstrapManaged);
     }
 
     private static BootstrapManifest manifest(int port, byte[] jarBytes) throws Exception {

@@ -5,6 +5,7 @@
 # SolderPy Loader
 
 ## Workflow with solder.py
+
 1. Find a mod on Modrinth and import it into solder.py.
 2. solder.py stores the Modrinth project and version IDs.
 3. When creating a Modrinth pack, solder.py uses those IDs to reference the native Modrinth files.
@@ -13,13 +14,16 @@
 6. When the mod is updated through Modrinth, solder.py keeps one version record that can be exported in the native formats for Modrinth and CurseForge while remaining available through Technic.
 
 ### Where SolderPy Loader comes in
-Modrinth, CurseForge, and Technic all have different distribution capabilities and limitations. Native platform downloads is used whenever possible, while SolderPy Loader handles content and features that the platforms cannot provide consistently:
+
+Modrinth, CurseForge, and Technic all have different distribution capabilities and limitations. Native platform downloads are used whenever possible, while SolderPy Loader handles content and features that the platforms cannot provide consistently:
+
 - Rich optional-content selection for players.
 - Distribution of configuration files, custom mods, resource packs, and other pack-specific content without publishing each item as a separate Modrinth or CurseForge project.
 - Server installation and updating.
 - Delivery of content managed through Maven or GitHub integrations.
-- Automated updates through solder.py’s write API.
-  This approach lets solder.py remain the single source of truth while each platform uses its native download system wherever possible.
+- Consumption of builds maintained through solder.py's write API.
+
+This approach lets solder.py remain the single source of truth while each platform uses its native download system wherever possible.
 
 SolderPy Loader is a loader-neutral Minecraft bootstrap mod for the
 [solder.py bootstrap API](https://github.com/Thorfusion/solder.py/blob/dev/docs/bootstrap-api.md).
@@ -108,6 +112,9 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
   "modpack": "example-pack",
   "build": "recommended",
   "target": "auto",
+  "source": "hybrid",
+  "platform": null,
+  "launcherOwnedMemberships": null,
   "clientId": null,
   "bootstrapJava": null,
   "bootstrapJavaMajor": 25,
@@ -129,6 +136,9 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
 | `modpack` | Required | Solder modpack slug |
 | `build` | `recommended` | Build name or Solder recommendation channel |
 | `target` | `auto` | Uses Relauncher side detection; `client` and `server` are explicit overrides |
+| `source` | `hybrid` | Uses verified provider URLs with the Solder-hosted artifact as fallback; `solder` restricts downloads to Solder |
+| `platform` | `null` | `modrinth`, `curseforge`, `prism`, or `technic` when the platform already owns some files |
+| `launcherOwnedMemberships` | `null` | Exact build membership IDs installed by a generated native export; `[]` explicitly means none |
 | `clientId` | `null` | Non-secret Solder client UUID (`cid`) for a private pack |
 | `bootstrapJava` | `null` | Java home or executable used only by the bootstrap worker |
 | `bootstrapJavaMajor` | `25` | Preferred automatically detected worker Java major |
@@ -146,6 +156,26 @@ SSDs; faster storage can use a manual override.
 Do not add a `selections` field. Optional definitions, rules, and defaults are
 authoritative API data, and the legacy local field is rejected.
 
+`source: "hybrid"` follows the API's ordered artifact sources: a configured
+per-version override, a verified provider such as Modrinth or Maven, and the
+Solder-hosted artifact as the final fallback. Use `source: "solder"` when every
+managed download must come from the Solder repository.
+
+Set `platform` only when SolderPy Loader was installed by the matching native
+export. The API keeps the complete dependency graph and labels every package's
+`install_owner` as `loader`, `launcher`, or `ignored`. Launcher-owned packages
+remain visible for dependency resolution but are never downloaded twice.
+
+Generated Modrinth, CurseForge, and Prism exports also write the exact native
+membership IDs to `launcherOwnedMemberships`. A non-null list makes the loader
+request `ownership=explicit` and apply that list over the server's ownership
+inference. Do not copy these build-local IDs between builds. `null` uses server
+inference, while `[]` explicitly makes every non-ignored package Loader-owned.
+Technic normally uses server-owned inference: its normal required packages can
+remain launcher-owned while SolderPy Loader manages optional and advanced
+content. Manual installations should normally leave both `platform` and
+`launcherOwnedMemberships` as `null`.
+
 ## Optional content
 
 On the first graphical client launch, SolderPy Loader displays the optionals
@@ -162,11 +192,12 @@ provided by the bootstrap manifest:
 Closing the screen or choosing **Cancel Launch** stops startup. **Restore API
 Defaults** resets the choices currently shown to the manifest defaults.
 
-After a successful install, selected memberships are stored in
-`.solderpy-loader/state.json`. An unchanged manifest reuses them without
-opening the screen again. When the manifest changes, existing options retain
-their saved choices and new options start from the current API defaults.
-Required memberships and dependency closure are always enforced.
+After a successful install, selected memberships and their stable group-key /
+package-slug identities are stored in `.solderpy-loader/state.json`. An
+unchanged manifest reuses them without opening the screen again. When a cloned
+or updated build changes database membership IDs, existing options still retain
+their saved choices; new options start from the current API defaults. Required
+memberships and dependency closure are always enforced.
 
 Dedicated servers do not open a GUI. They request the server manifest, use the
 API defaults, and install only `SERVER` and `BOTH` packages. A headless
@@ -217,6 +248,11 @@ Each installed package receipt records its version, artifact MD5, install
 location, and installed file hashes. Files that still match are left in place;
 missing or locally modified managed files are downloaded again. The loader
 does not wipe and reinstall the whole pack on every launch.
+
+When a package moves from Loader ownership to launcher ownership, its receipt
+is discarded without deleting the launcher's file. For an ordinary package
+removal, the loader deletes only files whose MD5 still matches its receipt;
+locally modified or unverifiable files are preserved.
 
 Updates are staged away from the live instance and committed only after all
 required work succeeds. A failed commit restores the previous files and state.

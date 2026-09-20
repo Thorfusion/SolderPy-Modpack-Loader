@@ -61,6 +61,70 @@ class SelectionResolverTest {
     }
 
     @Test
+    void launcherOwnedDependencySatisfiesLoaderPackageWithoutInstallation() throws Exception {
+        BootstrapManifest manifest = manifest();
+        BootstrapManifest.Package core = manifest.packages.get(0);
+        core.installOwner = "launcher";
+        core.bootstrapManaged = false;
+
+        List<BootstrapManifest.Package> selected =
+            SelectionResolver.resolve(manifest, Arrays.asList(11L, 12L));
+
+        assertEquals(Collections.singletonList("pretty-world"), selected.stream()
+            .map(item -> item.name).collect(Collectors.toList()));
+    }
+
+    @Test
+    void loaderOwnedDependencyOfLauncherPackageIsInstalled() throws Exception {
+        BootstrapManifest manifest = manifest();
+        manifest.optionalMode.name = "basic";
+        manifest.groups = Collections.emptyList();
+        manifest.selectionPolicy.requiredMemberships = Collections.emptyList();
+        manifest.selectionPolicy.defaultMemberships = Collections.emptyList();
+
+        BootstrapManifest.Package nativePackage = item(14, "native-feature", 0, null);
+        nativePackage.installOwner = "launcher";
+        nativePackage.bootstrapManaged = false;
+        BootstrapManifest.Dependency dependency = new BootstrapManifest.Dependency();
+        dependency.name = "core";
+        dependency.required = true;
+        dependency.present = true;
+        dependency.membershipId = 11L;
+        nativePackage.dependencies.add(dependency);
+        manifest.packages = Arrays.asList(
+            manifest.packages.get(0), nativePackage);
+
+        List<BootstrapManifest.Package> selected = SelectionResolver.resolve(manifest);
+
+        assertEquals(Collections.singletonList("core"), selected.stream()
+            .map(item -> item.name).collect(Collectors.toList()));
+    }
+
+    @Test
+    void exportedOwnershipOverridesServerInferenceExactly() throws Exception {
+        BootstrapManifest manifest = manifest();
+        manifest.packages.get(0).installOwner = "launcher";
+        manifest.packages.get(0).bootstrapManaged = false;
+
+        manifest.applyConfiguredOwnership(Collections.<Long>emptyList());
+        assertEquals("loader", manifest.packages.get(0).installOwner);
+        assertTrue(manifest.packages.get(0).bootstrapManaged);
+
+        manifest.applyConfiguredOwnership(Collections.singletonList(11L));
+        assertEquals("launcher", manifest.packages.get(0).installOwner);
+        assertFalse(manifest.packages.get(0).bootstrapManaged);
+    }
+
+    @Test
+    void exportedOwnershipCannotBypassAnAdvancedOptionalGroup() {
+        BootstrapManifest manifest = manifest();
+
+        assertThrows(LoaderException.class,
+            () -> manifest.applyConfiguredOwnership(
+                Collections.singletonList(12L)));
+    }
+
+    @Test
     void apiCanSelectNoChoicesForOptionalMultipleGroup() throws Exception {
         BootstrapManifest manifest = manifest();
         BootstrapManifest.Group group = manifest.groups.get(0);
@@ -276,7 +340,10 @@ class SelectionResolverTest {
         item.version = "1.0";
         item.bootstrapManaged = true;
         item.download = new BootstrapManifest.Download();
+        item.download.url = "https://cdn.example.test/" + slug + ".jar";
         item.download.md5 = "a" + String.format("%031d", membership);
+        item.download.format = "jar";
+        item.download.path = "mods/" + slug + ".jar";
         item.selection = new BootstrapManifest.Selection();
         item.selection.state = state;
         item.selection.groupKey = group;

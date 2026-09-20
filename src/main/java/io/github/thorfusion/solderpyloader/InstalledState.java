@@ -23,6 +23,7 @@ final class InstalledState {
     String target;
     String source;
     String platform;
+    List<Long> launcherOwnedMemberships;
     String build;
     String manifestHash;
     String etag;
@@ -127,7 +128,9 @@ final class InstalledState {
     boolean matches(LoaderConfig config) {
         return config.api.equals(api) && config.modpack.equals(modpack) &&
             config.target.equals(target) && Objects.equals(config.source, source) &&
-            Objects.equals(config.platform, platform) && manifest != null &&
+            Objects.equals(config.platform, platform) &&
+            Objects.equals(config.launcherOwnedMemberships,
+                launcherOwnedMemberships) && manifest != null &&
             Objects.equals(config.source, manifest.source);
     }
 }
