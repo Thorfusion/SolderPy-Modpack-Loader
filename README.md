@@ -207,7 +207,10 @@ defaults.
 ## Download and installation behavior
 
 The bootstrap is split into distinct phases so network, verification, and disk
-work remain visible:
+work remain visible. On graphical clients, one SolderPy Loader status window is
+shown before manifest resolution and remains open behind the optional-content
+selector. After the player continues, the same window immediately shows the
+installed-file check instead of leaving an unexplained blank interval:
 
 1. Resolve the manifest and optional memberships.
 2. Download up to four changed packages concurrently by default. The progress
@@ -221,6 +224,20 @@ When the API supplies ordered platform sources, the loader tries them in order.
 For example, it can try a native Modrinth file first and fall back to the
 canonical Solder URL if the download or verification fails.
 
+Downloads are persisted under `.solderpy-loader/cache/downloads` by their
+expected MD5. A failed update therefore keeps every artifact that finished and
+verified, and the next launch reuses those files instead of downloading the
+whole pending update again. Incomplete source-specific `.part` files are also
+kept and resumed with an HTTP `Range` request. If a server does not support
+range requests, the loader safely restarts that file from byte zero.
+
+A package with one download URL gets up to three total attempts for network,
+HTTP, size, and MD5 failures. When several sources are available, provider
+mirrors are attempted once so fallback remains fast; only the canonical Solder
+source gets up to three attempts. A hash failure discards that untrusted file
+before the next attempt. Short retry backoff prevents a temporary server error
+from immediately aborting launch.
+
 Verified raw JARs are installed directly for `MOD` packages. Multi-file
 `CONFIG`, `RES`, and `NONE` packages continue to use ZIP archives. Legacy
 `MOD` packages without an available raw JAR also use their Solder ZIP.
@@ -231,7 +248,9 @@ single-pass extractor because it avoids costly per-file process work. On
 Windows, normal 7-Zip installation directories are checked before `PATH`; on
 other systems, `7zz`, `7z`, and `7za` are checked. Set `SOLDERPY_7ZIP`
 or the `solderpy.loader.7zip` JVM property to select an executable explicitly.
-7-Zip is optional and is never bundled.
+7-Zip is optional and is never bundled. Its command-line process stays hidden;
+the Java status window reports archive inspection, background extraction,
+post-extraction verification, and staging progress.
 
 Every archive is inspected before extraction and audited afterward. Path
 traversal, symbolic links, oversized artifacts, excessive expanded data, and
@@ -243,6 +262,11 @@ Runtime state and file ownership receipts are stored under
 `.solderpy-loader/`. The loader uses an HTTP `304 Not Modified` response or
 an identical build and manifest hash to reuse the cached manifest and optional
 choices.
+
+Verified cached artifacts for the selected build are retained after a
+successful update; obsolete artifacts and completed partial files are pruned.
+Deleting `.solderpy-loader/cache/downloads` is safe when a manual cache reset is
+needed, but forces affected content to be downloaded again.
 
 Each installed package receipt records its version, artifact MD5, install
 location, and installed file hashes. Files that still match are left in place;

@@ -35,6 +35,10 @@ final class SafeZipExtractor {
     private final int maxEntries;
     private final SevenZipSupport sevenZip;
 
+    interface ProgressListener {
+        void update(String action, String detail);
+    }
+
     SafeZipExtractor(long maxExpandedBytes, int maxEntries) {
         this(maxExpandedBytes, maxEntries, SevenZipSupport.discover());
     }
@@ -77,13 +81,23 @@ final class SafeZipExtractor {
         }
 
         String action() {
-            String method = useSevenZip ? "Extracting ZIP with 7-Zip" :
+            String method = useSevenZip ? "Extracting ZIP in the background" :
                 "Extracting ZIP in one pass";
             return method + " (" + String.format(Locale.ROOT, "%,d", plan.files.size()) +
                 " files)";
         }
 
+        String detail() {
+            return useSevenZip
+                ? "SolderPy Loader is using the accelerated extractor. This can take a while."
+                : "SolderPy Loader is extracting and verifying the archive. This can take a while.";
+        }
+
         Extraction extract(Path stagingRoot) throws LoaderException {
+            return extract(stagingRoot, null);
+        }
+
+        Extraction extract(Path stagingRoot, ProgressListener listener) throws LoaderException {
             if (!useSevenZip) {
                 if (sevenZip != null && plan.files.size() >= SEVEN_ZIP_FILE_THRESHOLD) {
                     LoaderLog.info("Using single-pass ZIP extraction for " +
@@ -91,12 +105,13 @@ final class SafeZipExtractor {
                 }
                 return extractBuiltIn(archive, extractTo, stagingRoot);
             }
-            return extractWithSevenZip(archive, extractTo, stagingRoot, plan);
+            return extractWithSevenZip(archive, extractTo, stagingRoot, plan, listener);
         }
     }
 
     private Extraction extractWithSevenZip(
-        Path archive, String extractTo, Path stagingRoot, ArchivePlan plan)
+        Path archive, String extractTo, Path stagingRoot, ArchivePlan plan,
+        ProgressListener listener)
         throws LoaderException {
 
         Path externalRoot = null;
@@ -106,9 +121,13 @@ final class SafeZipExtractor {
             if (!sevenZip.extract(archive, externalRoot)) {
                 deleteTree(externalRoot);
                 externalRoot = null;
+                notifyProgress(listener, "Extracting ZIP with SolderPy Loader",
+                    "The accelerated extractor was unavailable; using the built-in extractor...");
                 return extractBuiltIn(archive, extractTo, stagingRoot);
             }
-            return auditAndMoveExternal(externalRoot, stagingRoot, plan);
+            notifyProgress(listener, "Verifying extracted ZIP",
+                "Checking the files produced by the background extractor...");
+            return auditAndMoveExternal(externalRoot, stagingRoot, plan, listener);
         } catch (LoaderException e) {
             throw e;
         } catch (IOException e) {
@@ -159,7 +178,8 @@ final class SafeZipExtractor {
     }
 
     private Extraction auditAndMoveExternal(
-        Path externalRoot, Path stagingRoot, ArchivePlan plan) throws LoaderException, IOException {
+        Path externalRoot, Path stagingRoot, ArchivePlan plan, ProgressListener listener)
+        throws LoaderException, IOException {
 
         Map<String, ArchiveFile> expected = new LinkedHashMap<String, ArchiveFile>();
         for (ArchiveFile file : plan.files) {
@@ -167,6 +187,7 @@ final class SafeZipExtractor {
         }
 
         long expanded = 0;
+        int checked = 0;
         Map<String, String> hashes = new LinkedHashMap<String, String>();
         try (Stream<Path> paths = Files.walk(externalRoot)) {
             for (Path path : paths.collect(Collectors.toList())) {
@@ -194,6 +215,11 @@ final class SafeZipExtractor {
                 }
                 expanded += size;
                 hashes.put(archiveFile.outputRelative, md5(path));
+                checked++;
+                if (checked == plan.files.size() || checked % 128 == 0) {
+                    notifyProgress(listener, "Verifying extracted ZIP",
+                        "Checked " + checked + " / " + plan.files.size() + " files...");
+                }
             }
         }
         if (!expected.isEmpty()) {
@@ -201,6 +227,9 @@ final class SafeZipExtractor {
         }
 
         List<String> result = new ArrayList<String>();
+        notifyProgress(listener, "Staging extracted ZIP",
+            "Moving " + plan.files.size() + " verified files into the update...");
+        int moved = 0;
         for (ArchiveFile file : plan.files) {
             Path source = PathSafety.resolve(externalRoot, file.archiveRelative);
             Path output = PathSafety.resolve(stagingRoot, file.outputRelative);
@@ -211,8 +240,21 @@ final class SafeZipExtractor {
             Files.createDirectories(output.getParent());
             Files.move(source, output, StandardCopyOption.REPLACE_EXISTING);
             result.add(file.outputRelative);
+            moved++;
+            if (moved == plan.files.size() || moved % 128 == 0) {
+                notifyProgress(listener, "Staging extracted ZIP",
+                    "Moved " + moved + " / " + plan.files.size() + " files...");
+            }
         }
         return new Extraction(result, hashes);
+    }
+
+    private static void notifyProgress(
+        ProgressListener listener, String action, String detail) {
+
+        if (listener != null) {
+            listener.update(action, detail);
+        }
     }
 
     private Extraction extractBuiltIn(

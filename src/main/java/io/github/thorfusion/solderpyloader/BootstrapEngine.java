@@ -46,40 +46,43 @@ final class BootstrapEngine {
     private void updateLocked() throws LoaderException {
         InstalledState previous = InstalledState.load(paths.dataDirectory());
         boolean samePack = previous.matches(config);
-
-        UpdatePlan plan = prepareUpdate(previous, samePack);
-
-        InstalledState next = new InstalledState();
-        next.api = config.api;
-        next.modpack = config.modpack;
-        next.target = config.target;
-        next.source = config.source;
-        next.platform = config.platform;
-        next.launcherOwnedMemberships = config.launcherOwnedMemberships == null
-            ? null : new ArrayList<Long>(config.launcherOwnedMemberships);
-        next.build = plan.manifest.build.version;
-        next.manifestHash = plan.manifest.manifestHash;
-        next.etag = plan.etag;
-        next.manifest = plan.manifest;
-        next.selectedMemberships = new ArrayList<Long>(plan.requestedMemberships);
-        next.selectedOptions = rememberedSelections(
-            plan.manifest, plan.requestedMemberships);
-
         BootstrapProgress progress = BootstrapProgress.create(
             "client".equals(config.target) && OptionalSelectionScreen.isAvailable());
         try {
+            progress.beginPreparation("Loading modpack information...");
+            UpdatePlan plan = prepareUpdate(previous, samePack, progress);
+
+            InstalledState next = new InstalledState();
+            next.api = config.api;
+            next.modpack = config.modpack;
+            next.target = config.target;
+            next.source = config.source;
+            next.platform = config.platform;
+            next.launcherOwnedMemberships = config.launcherOwnedMemberships == null
+                ? null : new ArrayList<Long>(config.launcherOwnedMemberships);
+            next.build = plan.manifest.build.version;
+            next.manifestHash = plan.manifest.manifestHash;
+            next.etag = plan.etag;
+            next.manifest = plan.manifest;
+            next.selectedMemberships = new ArrayList<Long>(plan.requestedMemberships);
+            next.selectedOptions = rememberedSelections(
+                plan.manifest, plan.requestedMemberships);
+
+            progress.beginPreparation("Checking installed modpack content...");
             Installer installer = new Installer(
                 paths.gameDirectory(), paths.dataDirectory(), config.limits,
                 paths.loaderJar(), progress);
             installer.reconcile(
                 plan.selected, plan.manifest.packages, previous, next);
+            LoaderLog.info("Modpack is ready (" + plan.selected.size() +
+                " managed package(s))");
         } finally {
             progress.close();
         }
-        LoaderLog.info("Modpack is ready (" + plan.selected.size() + " managed package(s))");
     }
 
-    private UpdatePlan prepareUpdate(InstalledState previous, boolean samePack)
+    private UpdatePlan prepareUpdate(
+        InstalledState previous, boolean samePack, BootstrapProgress progress)
         throws LoaderException {
 
         try {
@@ -123,7 +126,10 @@ final class BootstrapEngine {
             if (clientSide && !reuseSelections &&
                 OptionalSelectionScreen.hasSelectableOptions(manifest)) {
                 if (OptionalSelectionScreen.isAvailable()) {
-                    requestedMemberships = OptionalSelectionScreen.choose(manifest, requestedMemberships);
+                    progress.waitingForOptionalSelection();
+                    requestedMemberships = OptionalSelectionScreen.choose(
+                        manifest, requestedMemberships, progress.ownerWindow());
+                    progress.beginPreparation("Applying optional selections...");
                 } else {
                     LoaderLog.warn("A graphical environment is unavailable; using saved choices and API defaults");
                 }

@@ -23,10 +23,12 @@ import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.Dialog;
 import java.awt.Font;
 import java.awt.Frame;
 import java.awt.GraphicsEnvironment;
 import java.awt.Rectangle;
+import java.awt.Window;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.lang.reflect.InvocationTargetException;
@@ -101,6 +103,14 @@ final class OptionalSelectionScreen {
         final BootstrapManifest manifest, final Collection<Long> initialSelections)
         throws LoaderException {
 
+        return choose(manifest, initialSelections, null);
+    }
+
+    static Set<Long> choose(
+        final BootstrapManifest manifest,
+        final Collection<Long> initialSelections,
+        final Window owner) throws LoaderException {
+
         if (!isAvailable()) {
             throw new LoaderException("The optional selection screen requires a graphical environment");
         }
@@ -110,7 +120,7 @@ final class OptionalSelectionScreen {
         Runnable display = new Runnable() {
             @Override
             public void run() {
-                screen.showDialog();
+                screen.showDialog(owner);
             }
         };
         try {
@@ -133,9 +143,12 @@ final class OptionalSelectionScreen {
         return screen.result;
     }
 
-    private void showDialog() {
+    private void showDialog(Window owner) {
         String packName = manifest.modpack.name == null ? manifest.modpack.slug : manifest.modpack.name;
-        final JDialog dialog = new JDialog((Frame) null, packName + " - Optional Content", true);
+        final JDialog dialog = owner == null
+            ? new JDialog((Frame) null, packName + " - Optional Content", true)
+            : new JDialog(owner, packName + " - Optional Content",
+                Dialog.ModalityType.APPLICATION_MODAL);
         dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         dialog.addWindowListener(new WindowAdapter() {
             @Override

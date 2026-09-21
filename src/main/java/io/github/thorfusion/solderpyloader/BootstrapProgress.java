@@ -16,6 +16,7 @@ import java.awt.Font;
 import java.awt.Frame;
 import java.awt.GraphicsEnvironment;
 import java.awt.Rectangle;
+import java.awt.Window;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,9 +32,15 @@ final class BootstrapProgress implements AutoCloseable {
         new ConcurrentHashMap<Long, Long>();
     private final ConcurrentHashMap<Long, Long> lastProgressLogs =
         new ConcurrentHashMap<Long, Long>();
-    private final AtomicInteger completed = new AtomicInteger();
+    private final ConcurrentHashMap<Long, Long> downloadStartOffsets =
+        new ConcurrentHashMap<Long, Long>();
+    private final AtomicInteger checkedPackages = new AtomicInteger();
+    private final AtomicInteger downloadedPackages = new AtomicInteger();
+    private final AtomicInteger verifiedPackages = new AtomicInteger();
+    private final AtomicInteger installedPackages = new AtomicInteger();
     private volatile boolean graphical;
     private volatile boolean closed;
+    private volatile boolean downloadPhase;
     private volatile int total;
     private final Object downloadSlotLock = new Object();
     private final ConcurrentHashMap<Long, Integer> downloadSlotIndexes =
@@ -41,7 +48,7 @@ final class BootstrapProgress implements AutoCloseable {
     private long[] downloadSlotOwners = new long[0];
     private long[] downloadSlotVersions = new long[0];
     private int visibleDownloads = 1;
-    private JDialog dialog;
+    private volatile JDialog dialog;
     private JLabel titleLabel;
     private JLabel phaseLabel;
     private JProgressBar overall;
@@ -64,9 +71,116 @@ final class BootstrapProgress implements AutoCloseable {
         return new BootstrapProgress(false);
     }
 
-    void beginDownloads(List<BootstrapManifest.Package> packages, int concurrency) {
+    void beginPreparation(String message) {
+        downloadPhase = false;
+        LoaderLog.info(message);
+        if (!graphical) {
+            return;
+        }
+        try {
+            runOnEventThreadAndWait(() -> {
+                ensureDialog();
+                showSingleActivity();
+                titleLabel.setText("Loading SolderPy Loader");
+                phaseLabel.setText(message);
+                overall.setMinimum(0);
+                overall.setMaximum(1);
+                overall.setValue(0);
+                overall.setIndeterminate(true);
+                overall.setString("Please wait...");
+                currentLabel.setText(message);
+                currentProgress.setValue(0);
+                currentProgress.setIndeterminate(true);
+                currentProgress.setString("Working in the background...");
+                resizeDialog();
+            });
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            graphical = false;
+            LoaderLog.warn("SolderPy Loader status window was interrupted; continuing in the log");
+        } catch (InvocationTargetException | RuntimeException e) {
+            graphical = false;
+            LoaderLog.warn("Could not display SolderPy Loader status; continuing in the log");
+        }
+    }
+
+    void waitingForOptionalSelection() {
+        downloadPhase = false;
+        LoaderLog.info("Waiting for optional content selection");
+        runOnEventThread(() -> {
+            showSingleActivity();
+            if (titleLabel != null) {
+                titleLabel.setText("SolderPy Loader");
+            }
+            if (phaseLabel != null) {
+                phaseLabel.setText("Waiting for optional content selection...");
+            }
+            if (overall != null) {
+                overall.setIndeterminate(false);
+                overall.setValue(0);
+                overall.setString("Choose your optional content to continue");
+            }
+            if (currentLabel != null && currentProgress != null) {
+                currentLabel.setText("Optional content selection is open");
+                currentProgress.setIndeterminate(false);
+                currentProgress.setValue(0);
+                currentProgress.setString("Waiting for your choice...");
+            }
+        });
+    }
+
+    Window ownerWindow() {
+        return graphical ? dialog : null;
+    }
+
+    void beginInstalledCheck(List<BootstrapManifest.Package> packages) {
+        downloadPhase = false;
         total = packages.size();
-        completed.set(0);
+        checkedPackages.set(0);
+        String message = "Checking " + total + " selected package(s)...";
+        LoaderLog.info(message);
+        runOnEventThread(() -> {
+            showSingleActivity();
+            if (titleLabel != null) {
+                titleLabel.setText("Checking installed modpack content");
+            }
+            if (phaseLabel != null) {
+                phaseLabel.setText(message);
+            }
+            if (overall != null) {
+                overall.setIndeterminate(false);
+                overall.setMinimum(0);
+                overall.setMaximum(Math.max(1, total));
+                overall.setValue(0);
+                overall.setString("0 / " + total + " packages checked");
+            }
+            resetCurrent("Waiting for installed-file check...");
+            resizeDialog();
+        });
+    }
+
+    void checking(BootstrapManifest.Package item) {
+        updateCurrent(item, "Checking installed files",
+            "Verifying existing files...", 0, 1, true);
+    }
+
+    void checked(BootstrapManifest.Package item, boolean reusable) {
+        int finished = checkedPackages.incrementAndGet();
+        updateCurrent(item, reusable ? "Already installed" : "Update required",
+            reusable ? "Existing files are verified" : "Package will be downloaded",
+            1, 1, false);
+        runOnEventThread(() -> {
+            if (overall != null) {
+                overall.setValue(finished);
+                overall.setString(finished + " / " + total + " packages checked");
+            }
+        });
+    }
+
+    void beginDownloads(List<BootstrapManifest.Package> packages, int concurrency) {
+        downloadPhase = true;
+        total = packages.size();
+        downloadedPackages.set(0);
         resetDownloadSlots(Math.max(1, Math.min(MAX_VISIBLE_DOWNLOADS, concurrency)));
         LoaderLog.info("Downloading " + total + " changed package(s) with up to " +
             concurrency + " concurrent download(s)");
@@ -74,7 +188,19 @@ final class BootstrapProgress implements AutoCloseable {
             return;
         }
         try {
-            runOnEventThreadAndWait(this::createDialog);
+            runOnEventThreadAndWait(() -> {
+                ensureDialog();
+                rebuildDownloadRows();
+                showDownloadActivity();
+                titleLabel.setText("Downloading modpack content");
+                phaseLabel.setText("Downloading " + total + " changed package(s)...");
+                overall.setIndeterminate(false);
+                overall.setMinimum(0);
+                overall.setMaximum(total);
+                overall.setValue(0);
+                overall.setString("0 / " + total + " packages downloaded");
+                resizeDialog();
+            });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             graphical = false;
@@ -86,9 +212,10 @@ final class BootstrapProgress implements AutoCloseable {
     }
 
     void beginInstallation(List<BootstrapManifest.Package> packages, int concurrency) {
+        downloadPhase = false;
         invalidateDownloadSlots();
         total = packages.size();
-        completed.set(0);
+        installedPackages.set(0);
         String message = "Staging " + total + " downloaded package(s) with up to " +
             concurrency + " extraction worker(s)...";
         LoaderLog.info(message);
@@ -101,19 +228,22 @@ final class BootstrapProgress implements AutoCloseable {
                 phaseLabel.setText(message);
             }
             if (overall != null) {
+                overall.setIndeterminate(false);
                 overall.setMinimum(0);
                 overall.setMaximum(total);
                 overall.setValue(0);
                 overall.setString("0 / " + total + " packages staged");
             }
             resetCurrent("Waiting for staging...");
+            resizeDialog();
         });
     }
 
     void beginVerification(List<BootstrapManifest.Package> packages) {
+        downloadPhase = false;
         invalidateDownloadSlots();
         total = packages.size();
-        completed.set(0);
+        verifiedPackages.set(0);
         String message = "Verifying MD5 for " + total + " downloaded package(s)...";
         LoaderLog.info(message);
         runOnEventThread(() -> {
@@ -125,23 +255,48 @@ final class BootstrapProgress implements AutoCloseable {
                 phaseLabel.setText(message);
             }
             if (overall != null) {
+                overall.setIndeterminate(false);
                 overall.setMinimum(0);
                 overall.setMaximum(total);
                 overall.setValue(0);
                 overall.setString("0 / " + total + " packages verified");
             }
             resetCurrent("Waiting for verification...");
+            resizeDialog();
         });
     }
 
     void downloadStarted(BootstrapManifest.Package item, long expectedBytes) {
+        downloadStarted(item, expectedBytes, 0);
+    }
+
+    void downloadStarted(
+        BootstrapManifest.Package item, long expectedBytes, long resumedBytes) {
+
         long now = System.nanoTime();
         downloadStarts.put(item.membershipId, now);
+        downloadStartOffsets.put(item.membershipId, resumedBytes);
         lastProgressLogs.put(item.membershipId, now);
-        LoaderLog.info("Downloading " + displayName(item) +
+        LoaderLog.info((resumedBytes > 0 ? "Resuming " : "Downloading ") + displayName(item) +
             (expectedBytes >= 0 ? " (" + formatBytes(expectedBytes) + ")" : ""));
-        updateDownload(item, "Downloading", "Connecting...", 0, expectedBytes,
+        updateDownload(item, resumedBytes > 0 ? "Resuming download" : "Downloading",
+            resumedBytes > 0 ? "Continuing from " + formatBytes(resumedBytes) : "Connecting...",
+            resumedBytes, expectedBytes,
             expectedBytes < 0, true);
+    }
+
+    void downloadCacheHit(BootstrapManifest.Package item, long bytes) {
+        int finished = downloadedPackages.incrementAndGet();
+        LoaderLog.info("Using cached download for " + displayName(item) +
+            " (" + formatBytes(bytes) + ")");
+        updateDownload(item, "Cached", formatBytes(bytes), 1, 1, false, true);
+        releaseDownloadSlot(item.membershipId);
+        runOnEventThread(() -> {
+            if (overall != null && downloadPhase) {
+                overall.setValue(finished);
+                overall.setString(finished + " / " + total + " packages ready");
+            }
+        });
     }
 
     void downloadProgress(
@@ -156,15 +311,16 @@ final class BootstrapProgress implements AutoCloseable {
     }
 
     void downloadCompleted(BootstrapManifest.Package item, long downloadedBytes) {
-        int finished = completed.incrementAndGet();
+        int finished = downloadedPackages.incrementAndGet();
         String rate = formatRate(item, downloadedBytes);
         LoaderLog.info("Downloaded " + displayName(item) + " (" +
             formatBytes(downloadedBytes) + rate + ")");
         releaseDownloadSlot(item.membershipId);
         downloadStarts.remove(item.membershipId);
+        downloadStartOffsets.remove(item.membershipId);
         lastProgressLogs.remove(item.membershipId);
         runOnEventThread(() -> {
-            if (overall != null) {
+            if (overall != null && downloadPhase) {
                 overall.setValue(finished);
                 overall.setString(finished + " / " + total + " packages downloaded");
             }
@@ -173,6 +329,7 @@ final class BootstrapProgress implements AutoCloseable {
 
     void downloadFailed(BootstrapManifest.Package item, String message) {
         downloadStarts.remove(item.membershipId);
+        downloadStartOffsets.remove(item.membershipId);
         lastProgressLogs.remove(item.membershipId);
         LoaderLog.warn("Download failed for " + displayName(item) + ": " + message);
         releaseDownloadSlot(item.membershipId);
@@ -192,7 +349,7 @@ final class BootstrapProgress implements AutoCloseable {
     }
 
     void verificationCompleted(BootstrapManifest.Package item, long bytes) {
-        int finished = completed.incrementAndGet();
+        int finished = verifiedPackages.incrementAndGet();
         LoaderLog.info("Verified " + displayName(item) + " (" + formatBytes(bytes) + ")");
         updateCurrent(item, "Verified", formatBytes(bytes), 1, 1, false);
         runOnEventThread(() -> {
@@ -213,12 +370,16 @@ final class BootstrapProgress implements AutoCloseable {
     }
 
     void installing(BootstrapManifest.Package item, String action) {
+        installing(item, action, "Working in the background...");
+    }
+
+    void installing(BootstrapManifest.Package item, String action, String detail) {
         LoaderLog.info(action + " " + displayName(item));
-        updateCurrent(item, action, "Working...", 0, 1, true);
+        updateCurrent(item, action, detail, 0, 1, true);
     }
 
     void installed(BootstrapManifest.Package item) {
-        int finished = completed.incrementAndGet();
+        int finished = installedPackages.incrementAndGet();
         LoaderLog.info("Staged " + displayName(item));
         updateCurrent(item, "Staged", "Prepared", 1, 1, false);
         runOnEventThread(() -> {
@@ -230,11 +391,27 @@ final class BootstrapProgress implements AutoCloseable {
     }
 
     void phase(String message) {
+        downloadPhase = false;
         LoaderLog.info(message);
         runOnEventThread(() -> {
+            showSingleActivity();
+            if (titleLabel != null) {
+                titleLabel.setText("Finishing SolderPy Loader update");
+            }
             if (phaseLabel != null) {
                 phaseLabel.setText(message);
             }
+            if (overall != null) {
+                overall.setIndeterminate(true);
+                overall.setString("Please wait...");
+            }
+            if (currentLabel != null && currentProgress != null) {
+                currentLabel.setText(message);
+                currentProgress.setValue(0);
+                currentProgress.setIndeterminate(true);
+                currentProgress.setString("Working in the background...");
+            }
+            resizeDialog();
         });
     }
 
@@ -256,6 +433,12 @@ final class BootstrapProgress implements AutoCloseable {
         }
     }
 
+    private void ensureDialog() {
+        if (dialog == null) {
+            createDialog();
+        }
+    }
+
     private void createDialog() {
         dialog = new JDialog((Frame) null, "SolderPy Loader", false);
         dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
@@ -265,24 +448,58 @@ final class BootstrapProgress implements AutoCloseable {
 
         JPanel heading = new JPanel();
         heading.setLayout(new BoxLayout(heading, BoxLayout.Y_AXIS));
-        titleLabel = new JLabel("Downloading modpack content");
+        titleLabel = new JLabel("Loading SolderPy Loader");
         titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 20.0f));
         titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         heading.add(titleLabel);
         heading.add(Box.createVerticalStrut(5));
-        phaseLabel = new JLabel("Starting downloads...");
+        phaseLabel = new JLabel("Starting...");
         phaseLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         heading.add(phaseLabel);
         heading.add(Box.createVerticalStrut(8));
-        overall = new JProgressBar(0, total);
+        overall = new JProgressBar(0, 1);
         overall.setStringPainted(true);
-        overall.setString("0 / " + total + " packages downloaded");
+        overall.setIndeterminate(true);
+        overall.setString("Please wait...");
         overall.setAlignmentX(Component.LEFT_ALIGNMENT);
         heading.add(overall);
         root.add(heading, BorderLayout.NORTH);
 
         downloadPanel = new JPanel();
         downloadPanel.setLayout(new BoxLayout(downloadPanel, BoxLayout.Y_AXIS));
+        rebuildDownloadRows();
+        downloadPanel.setVisible(false);
+
+        currentPanel = new JPanel(new BorderLayout(4, 6));
+        currentPanel.setBorder(BorderFactory.createTitledBorder("Current package"));
+        currentLabel = new JLabel("Starting SolderPy Loader...");
+        currentProgress = new JProgressBar(0, 1000);
+        currentProgress.setStringPainted(true);
+        currentProgress.setIndeterminate(true);
+        currentProgress.setString("Working in the background...");
+        currentProgress.setPreferredSize(new Dimension(640, 24));
+        currentPanel.add(currentLabel, BorderLayout.NORTH);
+        currentPanel.add(currentProgress, BorderLayout.CENTER);
+        currentPanel.setVisible(true);
+
+        JPanel activity = new JPanel();
+        activity.setLayout(new BoxLayout(activity, BoxLayout.Y_AXIS));
+        activity.add(downloadPanel);
+        activity.add(currentPanel);
+        root.add(activity, BorderLayout.CENTER);
+
+        dialog.setContentPane(root);
+        resizeDialog();
+        dialog.setVisible(true);
+    }
+
+    private void rebuildDownloadRows() {
+        if (downloadPanel == null) {
+            return;
+        }
+        downloadPanel.removeAll();
+        downloadLabels.clear();
+        downloadProgressBars.clear();
         for (int index = 0; index < visibleDownloads; index++) {
             JPanel row = new JPanel(new BorderLayout(4, 6));
             row.setBorder(BorderFactory.createTitledBorder("Download " + (index + 1)));
@@ -297,28 +514,8 @@ final class BootstrapProgress implements AutoCloseable {
             downloadProgressBars.add(bar);
             downloadPanel.add(row);
         }
-
-        currentPanel = new JPanel(new BorderLayout(4, 6));
-        currentPanel.setBorder(BorderFactory.createTitledBorder("Current package"));
-        currentLabel = new JLabel("Waiting for download...");
-        currentProgress = new JProgressBar(0, 1000);
-        currentProgress.setStringPainted(true);
-        currentProgress.setString("Waiting...");
-        currentProgress.setPreferredSize(new Dimension(640, 24));
-        currentPanel.add(currentLabel, BorderLayout.NORTH);
-        currentPanel.add(currentProgress, BorderLayout.CENTER);
-        currentPanel.setVisible(false);
-
-        JPanel activity = new JPanel();
-        activity.setLayout(new BoxLayout(activity, BoxLayout.Y_AXIS));
-        activity.add(downloadPanel);
-        activity.add(currentPanel);
-        root.add(activity, BorderLayout.CENTER);
-
-        dialog.setContentPane(root);
-        dialog.pack();
-        fitToUsableScreen(dialog);
-        dialog.setVisible(true);
+        downloadPanel.revalidate();
+        downloadPanel.repaint();
     }
 
     private void updateCurrent(
@@ -466,6 +663,24 @@ final class BootstrapProgress implements AutoCloseable {
         }
     }
 
+    private void showDownloadActivity() {
+        if (downloadPanel != null) {
+            downloadPanel.setVisible(true);
+        }
+        if (currentPanel != null) {
+            currentPanel.setVisible(false);
+        }
+    }
+
+    private void resizeDialog() {
+        if (dialog == null) {
+            return;
+        }
+        dialog.getContentPane().revalidate();
+        dialog.pack();
+        fitToUsableScreen(dialog);
+    }
+
     private void resetCurrent(String text) {
         if (currentLabel == null || currentProgress == null) {
             return;
@@ -536,11 +751,16 @@ final class BootstrapProgress implements AutoCloseable {
         if (started == null || downloadedBytes <= 0) {
             return "";
         }
+        Long offset = downloadStartOffsets.get(item.membershipId);
+        long transferred = downloadedBytes - (offset == null ? 0 : offset.longValue());
+        if (transferred <= 0) {
+            return "";
+        }
         double seconds = (System.nanoTime() - started.longValue()) / 1_000_000_000.0;
         if (seconds < 0.2) {
             return "";
         }
-        return " at " + formatBytes((long) (downloadedBytes / seconds)) + "/s";
+        return " at " + formatBytes((long) (transferred / seconds)) + "/s";
     }
 
     private void logPeriodicProgress(BootstrapManifest.Package item, String text) {
