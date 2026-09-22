@@ -241,9 +241,24 @@ source gets up to three attempts. A hash failure discards that untrusted file
 before the next attempt. Short retry backoff prevents a temporary server error
 from immediately aborting launch.
 
-Verified raw JARs are installed directly for `MOD` packages. Multi-file
-`CONFIG`, `RES`, and `NONE` packages continue to use ZIP archives. Legacy
-`MOD` packages without an available raw JAR also use their Solder ZIP.
+### JAR and ZIP package handling
+
+SolderPy Loader verifies and stages a package before changing the live game
+directory. The downloaded artifact's size and MD5 must match the manifest. A
+failed verification is retried according to the download rules above and the
+untrusted artifact is never installed.
+
+Raw JAR and ZIP packages are then handled differently:
+
+- A raw JAR normally represents one `MOD` output. The verified JAR is staged
+  directly at the manifest's install path, such as `mods/example.jar`. Its
+  artifact MD5 is also recorded as the installed file's MD5.
+- A ZIP can produce multiple `CONFIG`, `RES`, `NONE`, or legacy `MOD` outputs.
+  The loader inspects its complete entry list before extraction, extracts into
+  a transaction directory outside the live instance, and calculates an MD5
+  for every extracted file. Those per-file hashes are derived from the
+  already-verified archive and become the installed ownership receipt.
+- A legacy `MOD` package without an available raw JAR follows the ZIP rules.
 
 If 7-Zip is installed, the loader can use its multithreaded extraction for
 normal archives. Archives containing thousands of small files use the built-in
@@ -259,6 +274,39 @@ Every archive is inspected before extraction and audited afterward. Path
 traversal, symbolic links, oversized artifacts, excessive expanded data, and
 excessive entry counts are rejected.
 
+The built-in extractor calculates each file's MD5 while writing it. When
+7-Zip is used, SolderPy Loader separately walks the extracted result, checks
+that every expected entry exists with the expected size, rejects unexpected
+entries, and calculates every file's MD5 before staging it. The live game
+directory is changed only after all selected packages have downloaded,
+verified, and staged successfully.
+
+### Existing files, repairs, and user-added files
+
+SolderPy Loader records only the paths it owns, together with their installed
+MD5 values, in `.solderpy-loader/state.json`. It checks every selected managed
+file against that receipt on later launches. It does not wipe or generally
+clean the `mods`, `config`, `resourcepacks`, or other game directories.
+
+| File situation | SolderPy Loader behavior |
+| --- | --- |
+| The target path does not exist before its first managed installation | Installs the packaged file and records ownership and its MD5. |
+| A file already exists at the target path and has the expected MD5 | Leaves the existing file in place and records ownership. Its contents do not need to be rewritten. |
+| A file already exists at a required target path but has different contents | Replaces it with the packaged file when the transaction commits. The temporary transaction backup exists only for rollback and is removed after a successful commit. |
+| A managed file still matches its receipt on a later launch | Leaves it in place. No package download or extraction is needed when the package version, artifact MD5, install path, and every installed file still match the receipt. |
+| A managed file is missing, corrupted, or manually edited | Marks the package for repair. The verified artifact is reused from the cache when possible or downloaded again, and the package is staged again. Missing or mismatching outputs are restored; outputs that already match are left untouched. |
+| A user adds a file at a path that is not listed in any ownership receipt | Ignores and preserves it, including extra files placed beside managed mods or configs. |
+| A user-added file occupies a path required by a selected package | Treats the path as a package output: an identical file is adopted, while a different file is replaced by the packaged version. |
+| An updated package no longer contains one of its former files, or the package is removed/deselected | Deletes the former output only when it still matches the old receipt. A locally modified or unverifiable former output is preserved and becomes unmanaged. |
+| A package changes from Loader ownership to launcher ownership | Drops the Loader receipt without deleting the launcher's file. |
+| Two selected managed packages claim the same output path | Stops the update with an error instead of choosing one package or silently overwriting the other. |
+
+Consequently, a damaged managed config is repaired automatically, but a
+deliberate edit to a managed config is also considered a mismatch and is
+restored from its package. Files created by Minecraft or a mod after
+installation are not repaired or deleted unless their exact paths were also
+declared as outputs of a managed package.
+
 ## State, updates, and reset
 
 Runtime state and file ownership receipts are stored under
@@ -272,14 +320,8 @@ Deleting `.solderpy-loader/cache/downloads` is safe when a manual cache reset is
 needed, but forces affected content to be downloaded again.
 
 Each installed package receipt records its version, artifact MD5, install
-location, and installed file hashes. Files that still match are left in place;
-missing or locally modified managed files are downloaded again. The loader
-does not wipe and reinstall the whole pack on every launch.
-
-When a package moves from Loader ownership to launcher ownership, its receipt
-is discarded without deleting the launcher's file. For an ordinary package
-removal, the loader deletes only files whose MD5 still matches its receipt;
-locally modified or unverifiable files are preserved.
+location, output paths, and installed file hashes. The repair and preservation
+rules are described in the preceding section.
 
 Updates are staged away from the live instance and committed only after all
 required work succeeds. A failed commit restores the previous files and state.
