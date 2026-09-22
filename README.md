@@ -136,7 +136,7 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
 | `modpack` | Required | Solder modpack slug |
 | `build` | `recommended` | Build name or Solder recommendation channel |
 | `target` | `auto` | Uses Relauncher side detection; `client` and `server` are explicit overrides |
-| `source` | `hybrid` | Uses verified provider URLs with the Solder-hosted artifact as fallback; `solder` restricts downloads to Solder |
+| `source` | `hybrid` | Controls package ownership: `hybrid` lets the native platform own exact supported files, while `solder` keeps ordinary build packages Loader-owned |
 | `platform` | `null` | `modrinth`, `curseforge`, `prism`, or `technic` when the platform already owns some files |
 | `launcherOwnedMemberships` | `null` | Exact build membership IDs installed by a generated native export; `[]` explicitly means none |
 | `clientId` | `null` | Non-secret Solder client UUID (`cid`) for a private pack |
@@ -156,10 +156,13 @@ SSDs; faster storage can use a manual override.
 Do not add a `selections` field. Optional definitions, rules, and defaults are
 authoritative API data, and the legacy local field is rejected.
 
-`source: "hybrid"` follows the API's ordered artifact sources: a configured
-per-version override, a verified provider such as Modrinth or Maven, and the
-Solder-hosted artifact as the final fallback. Use `source: "solder"` when every
-managed download must come from the Solder repository.
+For every Loader-owned raw JAR, both source modes follow the API's ordered
+artifact sources: a configured per-version override, a saved provider URL such
+as Modrinth or Maven, and the Solder-hosted artifact as the final fallback.
+`source: "solder"` means the native platform does not own ordinary build
+packages; it does not force their bytes to come only from Solder hosting.
+`source: "hybrid"` lets the native platform install exact supported matches
+and leaves the remaining packages to SolderPy Loader.
 
 Set `platform` only when SolderPy Loader was installed by the matching native
 export. The API keeps the complete dependency graph and labels every package's

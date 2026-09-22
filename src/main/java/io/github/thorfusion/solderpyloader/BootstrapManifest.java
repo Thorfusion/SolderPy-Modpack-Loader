@@ -134,9 +134,9 @@ final class BootstrapManifest {
         if (!expectedTarget.equals(target)) {
             throw new LoaderException("Bootstrap manifest target does not match the configuration");
         }
-        // Early schema-1 servers predate the explicit source response field and
-        // behaved like today's hybrid mode. Keep that default compatible while
-        // still refusing a server that cannot confirm an explicit solder mode.
+        // Early schema-1 servers predate the explicit ownership-mode response
+        // field and behaved like today's hybrid mode. Keep that default
+        // compatible while still requiring the requested ownership mode.
         if (isBlank(source)) {
             source = "hybrid";
         }

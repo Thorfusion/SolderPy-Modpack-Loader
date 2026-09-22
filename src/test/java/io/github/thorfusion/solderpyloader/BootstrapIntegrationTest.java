@@ -112,6 +112,21 @@ class BootstrapIntegrationTest {
     }
 
     @Test
+    void acceptsProviderFallbacksWhenSolderApiOwnsThePackage() throws Exception {
+        BootstrapManifest manifest = manifest(1234, new byte[] {1});
+        manifest.source = "solder";
+        BootstrapManifest.DownloadSource provider = new BootstrapManifest.DownloadSource();
+        provider.provider = "modrinth";
+        provider.url = "https://cdn.modrinth.com/example.jar";
+        manifest.packages.get(0).download.sources.add(provider);
+
+        manifest.validate("pack", "client", "solder");
+
+        assertEquals("modrinth",
+            manifest.packages.get(0).download.sources.get(0).provider);
+    }
+
+    @Test
     void treatsAnOlderSchemaOneManifestAsHybrid() throws Exception {
         BootstrapManifest manifest = manifest(1234, new byte[] {1});
         manifest.source = null;
