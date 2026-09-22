@@ -149,6 +149,7 @@ final class OptionalSelectionScreen {
             ? new JDialog((Frame) null, packName + " - Optional Content", true)
             : new JDialog(owner, packName + " - Optional Content",
                 Dialog.ModalityType.APPLICATION_MODAL);
+        SolderPyWindowIcon.apply(dialog);
         dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         dialog.addWindowListener(new WindowAdapter() {
             @Override

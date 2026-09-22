@@ -48,6 +48,13 @@ tasks.withType(Test).configureEach {
     useJUnitPlatform()
 }
 
+tasks.named('processResources') {
+    from('assets/solderpy-loader-logo.png') {
+        into 'assets/solderpyloader'
+        rename { 'icon.png' }
+    }
+}
+
 jar {
     archiveBaseName = 'solderpy-loader'
     archiveClassifier = 'thin'

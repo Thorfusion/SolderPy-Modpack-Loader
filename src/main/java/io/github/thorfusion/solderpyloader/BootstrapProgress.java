@@ -441,6 +441,7 @@ final class BootstrapProgress implements AutoCloseable {
 
     private void createDialog() {
         dialog = new JDialog((Frame) null, "SolderPy Loader", false);
+        SolderPyWindowIcon.apply(dialog);
         dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
 
         JPanel root = new JPanel(new BorderLayout(10, 10));
