@@ -47,6 +47,8 @@ the instance.
   a local configuration file.
 - Changed packages are downloaded concurrently, verified, staged, and committed
   as one recoverable update.
+- Available disk space is checked before network downloads and again before
+  extraction and rollback data are created.
 - Unchanged packages and remembered optional choices are reused on later
   launches.
 - Platform-native files can be tried first with a verified Solder-hosted
@@ -120,6 +122,15 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
   "source": "hybrid",
   "platform": null,
   "launcherOwnedMemberships": null,
+  "manifestVerification": {
+    "required": true,
+    "algorithm": "SHA256withECDSA",
+    "curve": "secp256r1",
+    "publicKeyFormat": "X.509",
+    "encoding": "base64",
+    "keyId": "sha256:<64 lowercase hexadecimal characters>",
+    "publicKey": "<base64 X.509 public key from the solder.py export>"
+  },
   "clientId": null,
   "bootstrapJava": null,
   "bootstrapJavaMajor": 25,
@@ -144,6 +155,7 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
 | `source` | `hybrid` | Controls package ownership: `hybrid` lets the native platform own exact supported files, while `solder` keeps ordinary build packages Loader-owned |
 | `platform` | `null` | `modrinth`, `curseforge`, `prism`, or `technic` when the platform already owns some files |
 | `launcherOwnedMemberships` | `null` | Exact build membership IDs installed by a generated native export; `[]` explicitly means none |
+| `manifestVerification` | Required at launch | Public ECDSA verification key pinned by the generated export; never contains the server's private key |
 | `clientId` | `null` | Non-secret Solder client UUID (`cid`) for a private pack |
 | `bootstrapJava` | `null` | Java home or executable used only by the bootstrap worker |
 | `bootstrapJavaMajor` | `25` | Preferred automatically detected worker Java major |
@@ -152,6 +164,11 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
 
 Solder API keys are deliberately not accepted in the local configuration.
 Plain HTTP is rejected except for loopback development servers.
+
+Do not invent or copy the `manifestVerification` values between solder.py
+installations. Generated exports pin the installation-wide public key. Existing
+packs created before manifest signing must be re-exported or reinstalled; the
+loader refuses to trust package URLs before a valid pinned key is available.
 
 The resource ceilings may be lowered but not raised beyond the built-in
 defaults. Download and extraction concurrency can be set from 1 to 16. Four
@@ -181,7 +198,14 @@ inference. Do not copy these build-local IDs between builds. `null` uses server
 inference, while `[]` explicitly makes every non-ignored package Loader-owned.
 Technic normally uses server-owned inference: its normal required packages can
 remain launcher-owned while SolderPy Modpack Loader manages optional and advanced
-content. Manual installations should normally leave both `platform` and
+content. File names are never used to recognize launcher-owned mods. Strict
+cleanup and normal launches compare file contents with the raw-JAR MD5 values
+already supplied by the signed bootstrap manifest, so the same bytes are
+recognized even when different launchers use different names. Every expected
+launcher-owned package must be present under `mods/`; a missing or wrong version
+stops launch with an error asking the user to repair or reinstall the pack in
+their launcher. Extra user files remain allowed unless strict cleanup is active.
+Manual installations should normally leave `platform` and
 `launcherOwnedMemberships` as `null`.
 
 ## Optional content
@@ -220,13 +244,18 @@ shown before manifest resolution and remains open behind the optional-content
 selector. After the player continues, the same window immediately shows the
 installed-file check instead of leaving an unexplained blank interval:
 
-1. Resolve the manifest and optional memberships.
-2. Download up to four changed packages concurrently by default. The progress
+1. Discover signed-bootstrap support, verify the complete manifest against the
+   public key pinned by the export, then resolve optional memberships.
+2. Hash-check launcher-owned packages and Loader-owned enforced outputs, then
+   preflight the disk space required for missing cached artifacts.
+3. Download up to four changed packages concurrently by default. The progress
    window shows the active downloads and live throughput.
-3. Verify completed artifacts against solder.py's stored MD5 and size.
-4. Extract or stage packages, one at a time by default.
-5. Commit the complete update transaction.
-6. Start normal mod discovery.
+4. Verify completed artifacts against solder.py's stored MD5 and size.
+5. Inspect verified ZIPs and check exact expanded, staging, rollback, and safety
+   margin requirements.
+6. Extract or stage packages, one at a time by default.
+7. Commit the complete update transaction.
+8. Start normal mod discovery.
 
 When the API supplies ordered platform sources, the loader tries them in order.
 For example, it can try a native Modrinth file first and fall back to the
@@ -239,12 +268,48 @@ whole pending update again. Incomplete source-specific `.part` files are also
 kept and resumed with an HTTP `Range` request. If a server does not support
 range requests, the loader safely restarts that file from byte zero.
 
+Before the first download, the loader totals the manifest artifact sizes and
+subtracts reusable cache files on the same storage volume. If an artifact has
+no declared size, its configured maximum download size is reserved instead.
+The check also keeps a safety margin of 10%, bounded between 256 MiB and 2 GiB.
+An insufficient-space error reports the required, available, and missing
+space, then stops before making a download request.
+
+The manifest size describes the compressed artifact, so a ZIP's exact expanded
+size is not known until its verified central directory can be inspected. After
+downloads finish, the loader performs a second check before extraction. It
+includes the exact declared sizes of all ZIP entries, staged JAR copies,
+existing managed files that may need rollback backups, and the same safety
+margin. Therefore no live modpack file is changed when either space check
+fails. An optional expanded-size field in the API could move this second check
+ahead of downloading, but it is not required for safe behavior.
+
+Every successful bootstrap response must contain a `SHA256withECDSA` signature
+whose key ID matches `manifestVerification`. The loader reproduces solder.py's
+canonical JSON encoding and authenticates the entire response except the
+detached `signature` object, including unknown additive fields and the optional
+`changes` summary. Verification happens before deserialization, selection, or
+use of any download URL. The signed JSON object is retained in
+`.solderpy-loader/state.json` and reverified before a cached `304 Not Modified`
+response or `failOpen` fallback is trusted. Tampered, unsigned, wrongly keyed,
+or unsupported signatures stop launch.
+
 A package with one download URL gets up to three total attempts for network,
 HTTP, size, and MD5 failures. When several sources are available, provider
 mirrors are attempted once so fallback remains fast; only the canonical Solder
 source gets up to three attempts. A hash failure discards that untrusted file
 before the next attempt. Short retry backoff prevents a temporary server error
 from immediately aborting launch.
+
+Failures name the affected package using its display name, version, and stable
+slug where available. Download errors also identify the provider, host, attempt
+number, and final reason without exposing a signed or token-bearing URL. A
+graphical client keeps the Java status window open and shows a scrollable error
+dialog; headless clients and servers receive the same reason in their log. The
+worker saves the latest details to `.solderpy-loader/last-error.txt`, allowing
+the parent Java agent and launcher log to report the real cause instead of only
+a child-process exit code. The report is cleared at the start of the next
+bootstrap attempt.
 
 ### JAR and ZIP package handling
 
@@ -305,7 +370,31 @@ clean the `mods`, `config`, `resourcepacks`, or other game directories.
 | An updated package no longer contains one of its former files | Deletes the former output only when it still matches the old receipt. A locally modified or unverifiable former output is preserved and becomes unmanaged. |
 | A package is removed or deselected | Deletes its former outputs only when they still match the old receipt. Locally modified or unverifiable outputs are preserved and become unmanaged. |
 | A package changes from Loader ownership to launcher ownership | Drops the Loader receipt without deleting the launcher's file. |
+| A launcher-owned package is present under any filename with the expected raw-JAR MD5 | Accepts it without downloading a duplicate. |
+| A launcher-owned package is missing or has different contents | Stops launch and names the affected package; no live files are changed. |
 | Two selected managed packages claim the same output path | Stops the update with an error instead of choosing one package or silently overwriting the other. |
+
+The table describes the default behavior when
+`update_policy.remove_unlisted_mod_files` is false. When the API sets it to
+true and the saved build version changes, the loader performs a strict
+reconciliation of regular files under `mods/`. It preserves the newly resolved
+Loader-owned outputs, files whose content matches the new build's complete
+allowed-hash set, the active Loader JAR, and Relauncher/runtime JARs. The hash
+set contains resolved Loader-owned output receipts and the signed manifest's
+raw-JAR MD5 values for resolved packages. Other regular
+files are scheduled for removal. It
+does not clean configs, resource packs, saves, or any directory outside
+`mods/`, does not follow symbolic links, and does nothing on first install or
+repeated launches of the same build version.
+
+Strict cleanup is part of the same persistent transaction as installation.
+Unlisted files are copied into rollback storage only after every new artifact
+has passed size and MD5 verification and staging. Disk space is checked for
+those backups, and any commit failure restores the removed files. If a
+launcher-owned package lacks any trusted installed-file hash, cleanup stops
+with an actionable error rather than guessing and possibly deleting a native
+mod. No CurseForge API lookup, provider filename, or filename synchronization
+is required for this comparison.
 
 Consequently, a damaged managed config is repaired automatically, but a
 deliberate edit to a managed config is also considered a mismatch and is
@@ -330,6 +419,10 @@ Runtime state and file ownership receipts are stored under
 `.solderpy-loader/`. The loader uses an HTTP `304 Not Modified` response or
 an identical build and manifest hash to reuse the cached manifest and optional
 choices.
+
+The most recent worker failure is written to
+`.solderpy-loader/last-error.txt`. It is diagnostic only and does not affect
+state, ownership, cache reuse, transaction recovery, or the next retry.
 
 Verified cached artifacts for the selected build are retained after a
 successful update; obsolete artifacts and completed partial files are pruned.

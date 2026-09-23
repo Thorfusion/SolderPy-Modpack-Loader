@@ -49,6 +49,27 @@ final class DownloadManager {
             cacheDirectory.toAbsolutePath().normalize();
     }
 
+    long additionalBytesRequired(List<BootstrapManifest.Package> packages) {
+        long required = 0L;
+        for (BootstrapManifest.Package item : packages) {
+            long expected = item.download.filesize == null
+                ? maxBytes : item.download.filesize.longValue();
+            long reclaimable = 0L;
+            if (cacheDirectory != null) {
+                Path cached = cachePath(item.download);
+                try {
+                    if (Files.isRegularFile(cached, LinkOption.NOFOLLOW_LINKS)) {
+                        reclaimable = Math.min(expected, Files.size(cached));
+                    }
+                } catch (IOException | RuntimeException ignored) {
+                    // Conservatively reserve the complete artifact.
+                }
+            }
+            required = DiskSpace.add(required, Math.max(0L, expected - reclaimable));
+        }
+        return required;
+    }
+
     void pruneCache(List<BootstrapManifest.Package> selected) {
         if (cacheDirectory == null || !Files.exists(cacheDirectory, LinkOption.NOFOLLOW_LINKS)) {
             return;
@@ -118,11 +139,17 @@ final class DownloadManager {
 
         List<BootstrapManifest.DownloadSource> sources = downloadSources(item.download);
         LoaderException failure = null;
+        BootstrapManifest.DownloadSource lastSource = null;
+        int lastAttempt = 0;
+        int lastAttemptLimit = 0;
         for (int index = firstSource; index < sources.size(); index++) {
             BootstrapManifest.DownloadSource source = sources.get(index);
             int attempts = sourceAttempts(item.download, sources, index);
             int startingAttempt = index == firstSource ? firstAttempt : 1;
             for (int attempt = startingAttempt; attempt <= attempts; attempt++) {
+                lastSource = source;
+                lastAttempt = attempt;
+                lastAttemptLimit = attempts;
                 try {
                     return downloadSource(
                         item, directory, progress, source, index, attempt);
@@ -131,6 +158,9 @@ final class DownloadManager {
                     if (Thread.currentThread().isInterrupted()) {
                         throw error;
                     }
+                    boolean willRetry = attempt < attempts || index + 1 < sources.size();
+                    progress.downloadAttemptFailed(item, sourceDescription(source),
+                        attempt, attempts, message(error), willRetry);
                     if (attempt < attempts) {
                         LoaderLog.warn("Download attempt " + attempt + " / " + attempts +
                             " from " + sourceName(source) + " failed for " + item.name +
@@ -145,9 +175,14 @@ final class DownloadManager {
             }
         }
         if (failure != null) {
-            throw failure;
+            LoaderException detailed = new LoaderException(
+                "Download failed for " + packageName(item) + ". Last attempt used " +
+                sourceDescription(lastSource) + " (attempt " + lastAttempt + " / " +
+                lastAttemptLimit + "): " + message(failure), failure);
+            progress.downloadFailed(item, message(detailed));
+            throw detailed;
         }
-        throw new LoaderException("Package " + item.name + " has no download source");
+        throw new LoaderException("Package " + packageName(item) + " has no download source");
     }
 
     private DownloadedFile downloadSource(
@@ -189,7 +224,7 @@ final class DownloadManager {
             connection.setConnectTimeout(CONNECT_TIMEOUT_MILLIS);
             connection.setReadTimeout(READ_TIMEOUT_MILLIS);
             connection.setRequestMethod("GET");
-            connection.setRequestProperty("User-Agent", "solderpy-loader/0.1");
+            connection.setRequestProperty("User-Agent", "solderpy-loader/0.3.1");
             connection.setRequestProperty("Accept", "application/octet-stream");
             connection.setRequestProperty("Accept-Encoding", "identity");
             if (resumed > 0) {
@@ -265,13 +300,11 @@ final class DownloadManager {
                 temporary, null, count, sourceIndex, sourceAttempt, persistentPartial);
         } catch (LoaderException e) {
             retainPartialOrDelete(temporary, metadata.filesize, persistentPartial);
-            progress.downloadFailed(item, message(e));
             throw e;
         } catch (IOException e) {
             retainPartialOrDelete(temporary, metadata.filesize, persistentPartial);
             LoaderException failure =
                 new LoaderException("Could not download package " + item.name, e);
-            progress.downloadFailed(item, message(failure));
             throw failure;
         } finally {
             // A fully consumed HttpURLConnection input stream is returned to Java's
@@ -588,6 +621,31 @@ final class DownloadManager {
             ? "download" : source.provider;
     }
 
+    private static String sourceDescription(BootstrapManifest.DownloadSource source) {
+        if (source == null) {
+            return "an unknown source";
+        }
+        String host = null;
+        try {
+            host = source.url == null ? null : URI.create(source.url).getHost();
+        } catch (RuntimeException ignored) {
+        }
+        return sourceName(source) + (host == null || host.isEmpty() ? "" : " at " + host);
+    }
+
+    private static String packageName(BootstrapManifest.Package item) {
+        String display = item.prettyName == null || item.prettyName.trim().isEmpty()
+            ? item.name : item.prettyName.trim();
+        if (item.version != null && !item.version.trim().isEmpty()) {
+            display += " " + item.version.trim();
+        }
+        if (item.name != null && !item.name.equals(display) &&
+            !display.startsWith(item.name + " ")) {
+            display += " [" + item.name + "]";
+        }
+        return display;
+    }
+
     private static void waitBeforeRetry(int nextAttempt) throws LoaderException {
         try {
             Thread.sleep(RETRY_BACKOFF_MILLIS * Math.max(1, nextAttempt - 1));
@@ -635,8 +693,9 @@ final class DownloadManager {
                 throw new IllegalArgumentException();
             }
             return uri;
-        } catch (IllegalArgumentException e) {
-            throw new LoaderException("Package download URL must use HTTPS (or loopback HTTP): " + value, e);
+        } catch (RuntimeException e) {
+            throw new LoaderException(
+                "Package download URL must use HTTPS (or loopback HTTP)", e);
         }
     }
 

@@ -5,9 +5,12 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
+import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
+import javax.swing.JTextArea;
 import javax.swing.WindowConstants;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -332,7 +335,22 @@ final class BootstrapProgress implements AutoCloseable {
         downloadStartOffsets.remove(item.membershipId);
         lastProgressLogs.remove(item.membershipId);
         LoaderLog.warn("Download failed for " + displayName(item) + ": " + message);
+        updateDownload(item, "Download failed", message, 0, 1, false, false);
         releaseDownloadSlot(item.membershipId);
+    }
+
+    void downloadAttemptFailed(
+        BootstrapManifest.Package item,
+        String source,
+        int attempt,
+        int attempts,
+        String message,
+        boolean willRetry) {
+
+        String detail = source + " attempt " + attempt + " / " + attempts + ": " + message;
+        LoaderLog.warn("Download attempt failed for " + displayName(item) + ": " + detail);
+        updateDownload(item, willRetry ? "Retrying download" : "Download failed",
+            detail, 0, 1, false, true);
     }
 
     void verificationStarted(BootstrapManifest.Package item, long bytes) {
@@ -413,6 +431,44 @@ final class BootstrapProgress implements AutoCloseable {
             }
             resizeDialog();
         });
+    }
+
+    void failed(Throwable error) {
+        String details = FailureReport.describe(error);
+        LoaderLog.warn("SolderPy Modpack Loader update failed: " + details);
+        if (!graphical || closed) {
+            return;
+        }
+        try {
+            runOnEventThreadAndWait(() -> {
+                ensureDialog();
+                showSingleActivity();
+                titleLabel.setText("SolderPy Modpack Loader update failed");
+                phaseLabel.setText("The modpack update could not be completed.");
+                overall.setIndeterminate(false);
+                overall.setValue(0);
+                overall.setString("Update stopped");
+                currentLabel.setText("See the error details below");
+                currentProgress.setIndeterminate(false);
+                currentProgress.setValue(0);
+                currentProgress.setString("Could not prepare the modpack");
+                resizeDialog();
+
+                JTextArea text = new JTextArea(details, 9, 72);
+                text.setEditable(false);
+                text.setLineWrap(true);
+                text.setWrapStyleWord(true);
+                text.setCaretPosition(0);
+                JScrollPane scroll = new JScrollPane(text);
+                JOptionPane.showMessageDialog(dialog, scroll,
+                    "SolderPy Modpack Loader update failed", JOptionPane.ERROR_MESSAGE);
+            });
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (InvocationTargetException | RuntimeException e) {
+            graphical = false;
+            LoaderLog.warn("Could not display the bootstrap failure dialog; see the log instead");
+        }
     }
 
     @Override

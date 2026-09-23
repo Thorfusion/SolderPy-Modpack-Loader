@@ -23,8 +23,8 @@ dependencies {
     compileOnly 'com.juanmuscaria:relauncher-core:1.1.1'
 
     implementation 'com.google.code.gson:gson:2.11.0'
-    implementation 'org.apache.commons:commons-compress:1.27.1'
-    implementation 'commons-io:commons-io:2.16.1'
+    implementation 'org.apache.commons:commons-compress:1.28.0'
+    implementation 'commons-io:commons-io:2.20.0'
 
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'

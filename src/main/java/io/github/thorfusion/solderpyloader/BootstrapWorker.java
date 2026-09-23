@@ -82,6 +82,7 @@ public final class BootstrapWorker {
                 throw new LoaderException("Bootstrap worker requires exactly one launch target");
             }
             paths = RuntimePaths.locate(BootstrapWorker.class);
+            FailureReport.clear(paths.dataDirectory());
             config = LoaderConfig.load(paths.configFile());
             if (!config.enabled) {
                 return EXIT_SUCCESS;
@@ -93,6 +94,7 @@ public final class BootstrapWorker {
             LoaderLog.info(error.getMessage());
             return EXIT_CANCELLED;
         } catch (Throwable error) {
+            FailureReport.write(paths == null ? null : paths.dataDirectory(), error);
             LoaderLog.error(error.getMessage() == null ? error.toString() : error.getMessage(), error);
             if (error instanceof RecoverableBootstrapException &&
                 config != null && config.failOpen && paths != null &&
@@ -110,15 +112,20 @@ public final class BootstrapWorker {
         try {
             InstalledState state = InstalledState.load(paths.dataDirectory());
             if (!state.matches(config) || state.manifest == null ||
-                state.selectedMemberships == null) {
+                state.signedManifest == null || state.selectedMemberships == null) {
                 return false;
             }
-            state.manifest.validate(config.modpack, config.target, config.source);
+            ManifestVerifier.verify(
+                state.signedManifest, config.manifestVerification);
+            BootstrapManifest manifest = JsonSupport.GSON.fromJson(
+                state.signedManifest, BootstrapManifest.class);
+            manifest.validate(config.modpack, config.target, config.source);
+            manifest.applyConfiguredOwnership(config.launcherOwnedMemberships);
             List<BootstrapManifest.Package> selected =
-                SelectionResolver.resolve(state.manifest, state.selectedMemberships);
+                SelectionResolver.resolve(manifest, state.selectedMemberships);
             Installer installer = new Installer(
                 paths.gameDirectory(), paths.dataDirectory(), config.limits, paths.loaderJar());
-            return installer.isInstalledStateIntact(selected, state);
+            return installer.isInstalledStateIntact(selected, manifest.packages, state);
         } catch (Throwable verificationFailure) {
             LoaderLog.warn(
                 "Cannot use failOpen because the previous installation could not be verified");

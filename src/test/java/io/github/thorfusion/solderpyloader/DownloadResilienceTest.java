@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -169,14 +170,23 @@ class DownloadResilienceTest {
             first.download.path = "mods/first.jar";
             BootstrapManifest.Package second = item(port, "/second.jar", secondBytes);
             second.name = "second";
+            second.prettyName = "Second Package";
             second.download.path = "mods/second.jar";
+            second.download.url += "?token=must-not-appear";
             LoaderConfig.Limits limits = new LoaderConfig.Limits();
             limits.maxConcurrentDownloads = 2;
             Installer installer = new Installer(
                 temporary.resolve("game"), temporary.resolve("game/.solderpy-loader"), limits);
 
-            assertThrows(RecoverableBootstrapException.class, () -> installer.reconcile(
-                Arrays.asList(first, second), new InstalledState(), new InstalledState()));
+            RecoverableBootstrapException failure =
+                assertThrows(RecoverableBootstrapException.class, () -> installer.reconcile(
+                    Arrays.asList(first, second), new InstalledState(), new InstalledState()));
+
+            assertTrue(failure.getMessage().contains("Second Package 1.0 [second]"));
+            assertTrue(failure.getMessage().contains("Download failed"));
+            assertTrue(failure.getMessage().contains("127.0.0.1"));
+            assertTrue(failure.getMessage().contains("attempt 3 / 3"));
+            assertFalse(failure.getMessage().contains("must-not-appear"));
 
             installer.reconcile(
                 Arrays.asList(first, second), new InstalledState(), new InstalledState());
@@ -188,6 +198,37 @@ class DownloadResilienceTest {
                 Files.readAllBytes(temporary.resolve("game/mods/first.jar")));
             assertArrayEquals(secondBytes,
                 Files.readAllBytes(temporary.resolve("game/mods/second.jar")));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void insufficientDiskSpaceStopsBeforeTheFirstNetworkRequest() throws Exception {
+        byte[] expected = "oversized-package".getBytes(StandardCharsets.UTF_8);
+        AtomicInteger requests = new AtomicInteger();
+        HttpServer server = server();
+        server.createContext("/oversized.jar", exchange -> {
+            requests.incrementAndGet();
+            send(exchange, 200, expected);
+        });
+        server.start();
+        try {
+            BootstrapManifest.Package item = item(
+                server.getAddress().getPort(), "/oversized.jar", expected);
+            item.prettyName = "Oversized Example";
+            item.download.filesize = Long.valueOf(Long.MAX_VALUE);
+
+            RecoverableBootstrapException failure = assertThrows(
+                RecoverableBootstrapException.class, () ->
+                    new Installer(temporary.resolve("disk-game"),
+                        temporary.resolve("disk-game/.solderpy-loader"),
+                        new LoaderConfig.Limits()).reconcile(
+                            java.util.Collections.singletonList(item),
+                            new InstalledState(), new InstalledState()));
+
+            assertTrue(failure.getMessage().contains("Not enough disk space"));
+            assertEquals(0, requests.get());
         } finally {
             server.stop(0);
         }

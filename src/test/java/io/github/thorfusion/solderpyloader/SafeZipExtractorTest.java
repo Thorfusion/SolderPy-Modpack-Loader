@@ -51,6 +51,19 @@ class SafeZipExtractorTest {
     }
 
     @Test
+    void preparationReportsExactExpandedBytesBeforeExtraction() throws Exception {
+        Path archive = temporary.resolve("size.zip");
+        writeEntry(archive, "config/example.cfg", "enabled=true", 0);
+
+        SafeZipExtractor.Prepared prepared = new SafeZipExtractor(1024, 10, null)
+            .prepare(archive, ".");
+
+        assertEquals("enabled=true".getBytes(StandardCharsets.UTF_8).length,
+            prepared.expandedBytes());
+        assertTrue(Files.notExists(temporary.resolve("output/config/example.cfg")));
+    }
+
+    @Test
     void rejectsTraversal() throws Exception {
         Path archive = temporary.resolve("traversal.zip");
         writeEntry(archive, "../outside.txt", "bad", 0);

@@ -1,0 +1,142 @@
+name: Security scan
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  merge_group:
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL (Java)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          validate-wrappers: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          queries: security-extended
+
+      - name: Grant execute permission for Gradle
+        run: chmod +x gradlew
+
+      - name: Compile for CodeQL
+        run: ./gradlew --no-daemon --stacktrace clean classes
+        env:
+          JAVA_TOOL_OPTIONS: -Djava.awt.headless=true
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java-kotlin
+
+  dependency-scan:
+    name: Bundled dependency scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          validate-wrappers: true
+
+      - name: Grant execute permission for Gradle
+        run: chmod +x gradlew
+
+      - name: Build shaded JAR
+        run: ./gradlew --no-daemon --stacktrace clean shadowJar
+        env:
+          JAVA_TOOL_OPTIONS: -Djava.awt.headless=true
+
+      - name: Scan bundled libraries for medium, high, and critical vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          # JAR dependency analysis is performed by Trivy's rootfs scanner.
+          # The fs scanner only looks for dependency manifests and would treat
+          # this shaded JAR as containing zero Java packages.
+          scan-type: rootfs
+          scan-ref: build/libs
+          version: v0.74.0
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: '1'
+          scanners: vuln
+          ignore-unfixed: false
+          vuln-type: library
+          severity: MEDIUM,HIGH,CRITICAL
+          limit-severities-for-sarif: true
+
+      - name: Upload scan results to GitHub Security
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-results.sarif
+          category: solderpy-loader-bundled-dependencies
+
+  dependency-review:
+    name: Review dependency changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check dependency changes
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: high

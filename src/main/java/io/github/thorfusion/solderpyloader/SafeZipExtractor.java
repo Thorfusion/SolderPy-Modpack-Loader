@@ -93,6 +93,18 @@ final class SafeZipExtractor {
                 : "SolderPy Modpack Loader is extracting and verifying the archive. This can take a while.";
         }
 
+        long expandedBytes() {
+            return plan.expandedBytes;
+        }
+
+        List<String> outputFiles() {
+            List<String> result = new ArrayList<String>(plan.files.size());
+            for (ArchiveFile file : plan.files) {
+                result.add(file.outputRelative);
+            }
+            return result;
+        }
+
         Extraction extract(Path stagingRoot) throws LoaderException {
             return extract(stagingRoot, null);
         }
@@ -174,7 +186,7 @@ final class SafeZipExtractor {
         } catch (IOException e) {
             throw new LoaderException("Could not safely inspect ZIP " + archive.getFileName(), e);
         }
-        return new ArchivePlan(files);
+        return new ArchivePlan(files, expanded);
     }
 
     private Extraction auditAndMoveExternal(
@@ -398,9 +410,11 @@ final class SafeZipExtractor {
 
     private static final class ArchivePlan {
         private final List<ArchiveFile> files;
+        private final long expandedBytes;
 
-        private ArchivePlan(List<ArchiveFile> files) {
+        private ArchivePlan(List<ArchiveFile> files, long expandedBytes) {
             this.files = files;
+            this.expandedBytes = expandedBytes;
         }
     }
 

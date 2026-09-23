@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -47,6 +48,38 @@ class LoaderConfigTest {
 
         assertEquals("solder", config.source);
         assertEquals("modrinth", config.platform);
+    }
+
+    @Test
+    void acceptsPinnedManifestVerificationFromAnExport() throws Exception {
+        java.security.KeyPair keys = ManifestSigningTestSupport.keyPair();
+        Path configFile = temporary.resolve("signed-loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"manifestVerification\":" +
+            ManifestSigningTestSupport.configurationJson(keys) + "}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        assertTrue(config.manifestVerification.required);
+        assertEquals("SHA256withECDSA", config.manifestVerification.algorithm);
+        assertTrue(config.manifestVerification.parsedPublicKey != null);
+    }
+
+    @Test
+    void rejectsManifestVerificationWithAMismatchedKeyId() throws Exception {
+        java.security.KeyPair keys = ManifestSigningTestSupport.keyPair();
+        String verification = ManifestSigningTestSupport.configurationJson(keys)
+            .replaceFirst("sha256:[0-9a-f]{64}", "sha256:" + repeat('0', 64));
+        Path configFile = temporary.resolve("bad-signed-loader.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"manifestVerification\":" +
+            verification + "}").getBytes(StandardCharsets.UTF_8));
+
+        LoaderException error = assertThrows(
+            LoaderException.class, () -> LoaderConfig.load(configFile));
+
+        assertTrue(error.getMessage().contains("keyId does not match"));
     }
 
     @Test
@@ -268,5 +301,13 @@ class LoaderConfigTest {
             .getBytes(StandardCharsets.UTF_8));
 
         assertThrows(LoaderException.class, () -> LoaderConfig.load(configFile));
+    }
+
+    private static String repeat(char value, int count) {
+        StringBuilder result = new StringBuilder(count);
+        for (int index = 0; index < count; index++) {
+            result.append(value);
+        }
+        return result.toString();
     }
 }

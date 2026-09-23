@@ -10,6 +10,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.PublicKey;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -39,6 +40,7 @@ final class LoaderConfig {
     String bootstrapJava;
     Integer bootstrapJavaMajor = DEFAULT_BOOTSTRAP_JAVA_MAJOR;
     boolean failOpen;
+    ManifestVerification manifestVerification;
     @SerializedName("selections") JsonElement legacySelections;
     Limits limits = new Limits();
 
@@ -50,6 +52,17 @@ final class LoaderConfig {
         int maxArchiveEntries = DEFAULT_MAX_ARCHIVE_ENTRIES;
         int maxConcurrentDownloads = DEFAULT_MAX_CONCURRENT_DOWNLOADS;
         int maxConcurrentExtractions = DEFAULT_MAX_CONCURRENT_EXTRACTIONS;
+    }
+
+    static final class ManifestVerification {
+        boolean required;
+        String algorithm;
+        String curve;
+        String publicKeyFormat;
+        String encoding;
+        String keyId;
+        String publicKey;
+        transient PublicKey parsedPublicKey;
     }
 
     static LoaderConfig load(Path file) throws LoaderException {
@@ -149,6 +162,9 @@ final class LoaderConfig {
             throw new LoaderException(
                 "The selections configuration field is no longer supported; " +
                 "optional definitions and defaults must be supplied by the bootstrap API");
+        }
+        if (manifestVerification != null) {
+            ManifestVerifier.validateConfiguration(manifestVerification);
         }
         if (limits == null) {
             limits = new Limits();

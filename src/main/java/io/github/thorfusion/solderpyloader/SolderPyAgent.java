@@ -22,6 +22,12 @@ public final class SolderPyAgent {
                 throw new LaunchCancelledException("solder.py modpack launch cancelled");
             }
             if (exitCode != BootstrapWorker.EXIT_SUCCESS) {
+                String report = FailureReport.read(paths.dataDirectory());
+                if (report != null && !report.trim().isEmpty()) {
+                    throw new LoaderException(report + System.lineSeparator() +
+                        System.lineSeparator() + "Failure report: " +
+                        paths.dataDirectory().resolve(FailureReport.FILE_NAME));
+                }
                 throw new LoaderException(
                     "The solder.py bootstrap worker exited with code " + exitCode);
             }

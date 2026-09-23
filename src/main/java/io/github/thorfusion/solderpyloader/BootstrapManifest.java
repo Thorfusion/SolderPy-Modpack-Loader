@@ -16,6 +16,7 @@ final class BootstrapManifest {
     Build build;
     String target;
     String source;
+    @SerializedName("update_policy") UpdatePolicy updatePolicy = new UpdatePolicy();
     @SerializedName("optional_mode") OptionalMode optionalMode;
     @SerializedName("selection_policy") SelectionPolicy selectionPolicy;
     List<Group> groups = new ArrayList<Group>();
@@ -42,6 +43,14 @@ final class BootstrapManifest {
     static final class OptionalMode {
         int id;
         String name;
+    }
+
+    static final class UpdatePolicy {
+        @SerializedName("remove_unlisted_mod_files") boolean removeUnlistedModFiles;
+    }
+
+    boolean removesUnlistedModFiles() {
+        return updatePolicy != null && updatePolicy.removeUnlistedModFiles;
     }
 
     static final class SelectionPolicy {
@@ -137,6 +146,10 @@ final class BootstrapManifest {
         }
         if (build == null || isBlank(build.version)) {
             throw new LoaderException("Bootstrap manifest is missing its resolved build version");
+        }
+        if (updatePolicy == null) {
+            // The policy is additive to schema 1. Older manifests preserve files.
+            updatePolicy = new UpdatePolicy();
         }
         if (!expectedTarget.equals(target)) {
             throw new LoaderException("Bootstrap manifest target does not match the configuration");

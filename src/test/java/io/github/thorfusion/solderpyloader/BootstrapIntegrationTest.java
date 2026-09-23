@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
+import java.security.KeyPair;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,7 +34,10 @@ class BootstrapIntegrationTest {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         int port = server.getAddress().getPort();
         BootstrapManifest manifest = manifest(port, jarBytes);
-        byte[] manifestBytes = JsonSupport.GSON.toJson(manifest).getBytes(StandardCharsets.UTF_8);
+        KeyPair signingKey = ManifestSigningTestSupport.keyPair();
+        byte[] manifestBytes = ManifestSigningTestSupport.jsonBytes(
+            ManifestSigningTestSupport.sign(
+                JsonSupport.GSON.toJsonTree(manifest).getAsJsonObject(), signingKey));
         FixtureHandler fixture = new FixtureHandler(jarBytes, manifestBytes);
         server.createContext("/", fixture);
         server.start();
@@ -42,7 +46,9 @@ class BootstrapIntegrationTest {
             String configJson = "{\"api\":\"http://127.0.0.1:" + port +
                 "/api/\",\"modpack\":\"pack\",\"source\":\"hybrid\"," +
                 "\"platform\":\"modrinth\"," +
-                "\"launcherOwnedMemberships\":[2]}";
+                "\"launcherOwnedMemberships\":[2]," +
+                "\"manifestVerification\":" +
+                ManifestSigningTestSupport.configurationJson(signingKey) + "}";
             Files.write(configFile, configJson.getBytes(StandardCharsets.UTF_8));
             LoaderConfig config = LoaderConfig.load(configFile);
             config.resolveTarget("client");
@@ -166,6 +172,18 @@ class BootstrapIntegrationTest {
         assertFalse(disabled.enforcesOnLaunch());
     }
 
+    @Test
+    void defaultsModCleanupOffAndReadsTheNewUpdatePolicy() {
+        BootstrapManifest older = JsonSupport.GSON.fromJson(
+            "{}", BootstrapManifest.class);
+        BootstrapManifest strict = JsonSupport.GSON.fromJson(
+            "{\"update_policy\":{\"remove_unlisted_mod_files\":true}}",
+            BootstrapManifest.class);
+
+        assertFalse(older.removesUnlistedModFiles());
+        assertTrue(strict.removesUnlistedModFiles());
+    }
+
     private static BootstrapManifest manifest(int port, byte[] jarBytes) throws Exception {
         BootstrapManifest manifest = new BootstrapManifest();
         manifest.schema = "solder.py/bootstrap";
@@ -233,8 +251,9 @@ class BootstrapIntegrationTest {
             String path = exchange.getRequestURI().getPath();
             if ("/api/".equals(path)) {
                 send(exchange, 200, "application/json",
-                    "{\"capabilities\":{\"bootstrap_manifest\":true,\"bootstrap_schema\":1}}"
-                        .getBytes(StandardCharsets.UTF_8));
+                    ("{\"capabilities\":{\"bootstrap_manifest\":true," +
+                        "\"bootstrap_signatures\":true,\"bootstrap_schema\":1}}"
+                    ).getBytes(StandardCharsets.UTF_8));
             } else if ("/api/modpack/pack/recommended/bootstrap".equals(path)) {
                 manifestQuery = exchange.getRequestURI().getRawQuery();
                 exchange.getResponseHeaders().set("Content-Type", "application/json");

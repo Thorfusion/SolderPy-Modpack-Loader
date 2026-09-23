@@ -25,10 +25,12 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
+import java.util.zip.ZipFile;
 
 final class Installer {
     private static final char[] HEX = "0123456789abcdef".toCharArray();
-    private static final ThreadLocal<byte[]> MD5_BUFFER =
+    private static final ThreadLocal<byte[]> HASH_BUFFER =
         new ThreadLocal<byte[]>() {
             @Override
             protected byte[] initialValue() {
@@ -74,9 +76,18 @@ final class Installer {
     boolean isInstalledStateIntact(
         List<BootstrapManifest.Package> selected, InstalledState state) throws LoaderException {
 
+        return isInstalledStateIntact(selected, selected, state);
+    }
+
+    boolean isInstalledStateIntact(
+        List<BootstrapManifest.Package> selected,
+        List<BootstrapManifest.Package> allPackages,
+        InstalledState state) throws LoaderException {
+
         if (state.receipts.size() != selected.size()) {
             return false;
         }
+        verifyLauncherOwnedFiles(allPackages);
         for (BootstrapManifest.Package item : selected) {
             if (!isReusable(item, state.receipts.get(item.name))) {
                 return false;
@@ -90,7 +101,7 @@ final class Installer {
         InstalledState previous,
         InstalledState next) throws LoaderException {
 
-        reconcile(selected, selected, previous, next);
+        reconcile(selected, selected, previous, next, false);
     }
 
     void reconcile(
@@ -98,6 +109,16 @@ final class Installer {
         List<BootstrapManifest.Package> allPackages,
         InstalledState previous,
         InstalledState next) throws LoaderException {
+
+        reconcile(selected, allPackages, previous, next, false);
+    }
+
+    void reconcile(
+        List<BootstrapManifest.Package> selected,
+        List<BootstrapManifest.Package> allPackages,
+        InstalledState previous,
+        InstalledState next,
+        boolean removeUnlistedModFiles) throws LoaderException {
 
         Path transaction = InstallTransaction.create(dataDirectory);
         Path content = transaction.resolve("content");
@@ -117,15 +138,18 @@ final class Installer {
                     externallyOwnedPackages.add(item.name);
                 }
             }
+            verifyLauncherOwnedFiles(allPackages);
             Set<String> reusablePackages = new LinkedHashSet<String>();
             List<BootstrapManifest.Package> pendingDownloads =
                 new ArrayList<BootstrapManifest.Package>();
-
+            boolean strictModCleanup = removeUnlistedModFiles &&
+                previous != null && previous.build != null && next.build != null &&
+                !previous.build.equals(next.build);
             progress.beginInstalledCheck(selected);
             for (BootstrapManifest.Package item : selected) {
                 progress.checking(item);
                 InstalledState.Receipt oldReceipt = previous.receipts.get(item.name);
-                boolean reusable = isReusable(item, oldReceipt);
+                boolean reusable = isReusable(item, oldReceipt, strictModCleanup);
                 if (reusable) {
                     reusablePackages.add(item.name);
                 } else {
@@ -134,12 +158,22 @@ final class Installer {
                 progress.checked(item, reusable);
             }
 
+            if (!pendingDownloads.isEmpty()) {
+                progress.phase("Checking disk space for downloads...");
+                long requiredBytes = downloads.additionalBytesRequired(pendingDownloads);
+                if (strictModCleanup) {
+                    requiredBytes = DiskSpace.add(
+                        requiredBytes, regularModFilesBytes());
+                }
+                DiskSpace.require(dataDirectory, requiredBytes,
+                    "download " + pendingDownloads.size() + " changed package(s)");
+            }
             DownloadBatch downloadBatch =
                 downloadAll(pendingDownloads, downloadDirectory);
             Map<String, DownloadManager.DownloadedFile> downloaded = verifyAll(
                 pendingDownloads, downloadBatch.files, downloadBatch.failure);
             Map<String, StagedPackage> stagedPackages =
-                stageAll(pendingDownloads, downloaded, packagesDirectory);
+                stageAll(pendingDownloads, downloaded, packagesDirectory, previous, selected);
             if (!pendingDownloads.isEmpty()) {
                 progress.phase("Checking package ownership...");
             }
@@ -220,6 +254,21 @@ final class Installer {
                 }
             }
 
+            if (strictModCleanup) {
+                progress.phase("Finding unlisted files in the mods folder...");
+                Map<String, Set<String>> allowedHashes = allowedModHashes(
+                    receipts, allPackages);
+                addUnlistedModRemovals(
+                    removals, desiredPaths.keySet(), allPackages, allowedHashes);
+            }
+
+            if (!stagedPaths.isEmpty() || !removals.isEmpty()) {
+                progress.phase("Checking disk space for rollback backups...");
+                DiskSpace.require(dataDirectory,
+                    estimateCommitBackupBytes(stagedPaths, removals),
+                    "create rollback backups for the modpack update");
+            }
+
             next.receipts = receipts;
             progress.phase("Committing modpack update...");
             commitStarted = true;
@@ -263,15 +312,334 @@ final class Installer {
         return true;
     }
 
+    private long regularModFilesBytes() throws LoaderException {
+        Path mods = gameDirectory.resolve("mods");
+        if (!Files.exists(mods, LinkOption.NOFOLLOW_LINKS)) {
+            return 0L;
+        }
+        if (Files.isSymbolicLink(mods) ||
+            !Files.isDirectory(mods, LinkOption.NOFOLLOW_LINKS)) {
+            throw new LoaderException(
+                "Strict mod cleanup requires mods to be a safe directory: " + mods);
+        }
+        long result = 0L;
+        try (Stream<Path> paths = Files.walk(mods)) {
+            java.util.Iterator<Path> iterator = paths.iterator();
+            while (iterator.hasNext()) {
+                Path path = iterator.next();
+                if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(path)) {
+                    result = DiskSpace.add(result,
+                        fileSize(path, "file in mods for cleanup rollback"));
+                }
+            }
+            return result;
+        } catch (LoaderException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            throw new LoaderException(
+                "Could not inspect the mods folder for the disk-space check", e);
+        }
+    }
+
+    private void addUnlistedModRemovals(
+        Set<String> removals,
+        Set<String> desiredPathKeys,
+        List<BootstrapManifest.Package> allPackages,
+        Map<String, Set<String>> allowedHashes) throws LoaderException {
+
+        Path mods = gameDirectory.resolve("mods");
+        if (!Files.exists(mods, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        if (Files.isSymbolicLink(mods) ||
+            !Files.isDirectory(mods, LinkOption.NOFOLLOW_LINKS)) {
+            throw new LoaderException(
+                "Strict mod cleanup requires mods to be a safe directory: " + mods);
+        }
+
+        Set<String> protectedPaths = new LinkedHashSet<String>(desiredPathKeys);
+        if (loaderJar != null && loaderJar.startsWith(gameDirectory)) {
+            addProtectedModPath(protectedPaths,
+                gameDirectory.relativize(loaderJar).toString().replace('\\', '/'));
+        }
+
+        int added = 0;
+        try (Stream<Path> paths = Files.walk(mods)) {
+            java.util.Iterator<Path> iterator = paths.iterator();
+            while (iterator.hasNext()) {
+                Path file = iterator.next();
+                if (file.equals(mods) || Files.isDirectory(file, LinkOption.NOFOLLOW_LINKS)) {
+                    continue;
+                }
+                if (Files.isSymbolicLink(file) ||
+                    !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+                    LoaderLog.warn(
+                        "Preserving unsafe non-regular entry during strict mod cleanup: " + file);
+                    continue;
+                }
+                String relative = PathSafety.normalizeRelative(
+                    gameDirectory.relativize(file).toString().replace('\\', '/'), false);
+                String collision = PathSafety.collisionKey(relative);
+                if (protectedPaths.contains(collision) || isLoaderRuntimeJar(file) ||
+                    matchesAllowedHash(file, allowedHashes)) {
+                    continue;
+                }
+                if (removals.add(relative)) {
+                    added++;
+                }
+            }
+        } catch (LoaderException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            throw new LoaderException(
+                "Could not inspect the mods folder for strict cleanup", e);
+        }
+        LoaderLog.info("Strict mod cleanup scheduled " + added +
+            " unlisted file(s) for transactional removal");
+    }
+
+    private void verifyLauncherOwnedFiles(
+        List<BootstrapManifest.Package> allPackages) throws LoaderException {
+
+        Map<String, List<BootstrapManifest.Package>> missing =
+            new LinkedHashMap<String, List<BootstrapManifest.Package>>();
+        for (BootstrapManifest.Package item : allPackages) {
+            if (!"launcher".equals(item.installOwner)) {
+                continue;
+            }
+            if (!hasLauncherJarMd5(item)) {
+                throw new LoaderException(
+                    "Cannot verify launcher-owned " + packageIdentity(item) +
+                    " because the signed manifest has no raw JAR MD5. Publish the " +
+                    "package with a raw JAR MD5 before exporting the pack.");
+            }
+            String hash = item.download.md5.toLowerCase(Locale.ROOT);
+            List<BootstrapManifest.Package> packages = missing.get(hash);
+            if (packages == null) {
+                packages = new ArrayList<BootstrapManifest.Package>();
+                missing.put(hash, packages);
+            }
+            packages.add(item);
+        }
+        if (missing.isEmpty()) {
+            return;
+        }
+
+        progress.phase("Verifying launcher-installed mods...");
+        Path mods = gameDirectory.resolve("mods");
+        if (Files.exists(mods, LinkOption.NOFOLLOW_LINKS)) {
+            if (Files.isSymbolicLink(mods) ||
+                !Files.isDirectory(mods, LinkOption.NOFOLLOW_LINKS)) {
+                throw new LoaderException(
+                    "Launcher-owned mod verification requires mods to be a safe directory: " +
+                    mods);
+            }
+            try (Stream<Path> paths = Files.walk(mods)) {
+                java.util.Iterator<Path> iterator = paths.iterator();
+                while (iterator.hasNext() && !missing.isEmpty()) {
+                    Path file = iterator.next();
+                    if (Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) &&
+                        !Files.isSymbolicLink(file)) {
+                        missing.remove(md5(file));
+                    }
+                }
+            } catch (LoaderException e) {
+                throw e;
+            } catch (IOException | RuntimeException e) {
+                throw new LoaderException(
+                    "Could not inspect the mods folder for launcher-owned packages", e);
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            List<String> identities = new ArrayList<String>();
+            for (List<BootstrapManifest.Package> packages : missing.values()) {
+                for (BootstrapManifest.Package item : packages) {
+                    identities.add(packageIdentity(item));
+                }
+            }
+            throw new LoaderException(
+                "Launcher-owned mod verification failed. Missing or wrong version: " +
+                String.join(", ", identities) + ". Repair or reinstall the modpack in " +
+                "the launcher, then try again.");
+        }
+        LoaderLog.info("Verified " + launcherPackageCount(allPackages) +
+            " launcher-owned package(s) by MD5");
+    }
+
+    private static int launcherPackageCount(
+        List<BootstrapManifest.Package> allPackages) {
+
+        int result = 0;
+        for (BootstrapManifest.Package item : allPackages) {
+            if ("launcher".equals(item.installOwner)) {
+                result++;
+            }
+        }
+        return result;
+    }
+
+    private static Map<String, Set<String>> allowedModHashes(
+        Map<String, InstalledState.Receipt> receipts,
+        List<BootstrapManifest.Package> allPackages) throws LoaderException {
+
+        Map<String, Set<String>> result = new LinkedHashMap<String, Set<String>>();
+        for (InstalledState.Receipt receipt : receipts.values()) {
+            if (receipt == null || receipt.hashes == null) {
+                continue;
+            }
+            for (Map.Entry<String, String> hash : receipt.hashes.entrySet()) {
+                String relative = PathSafety.normalizeRelative(hash.getKey(), false);
+                if (PathSafety.collisionKey(relative).startsWith("mods/") &&
+                    hash.getValue() != null && hash.getValue().matches("[0-9a-fA-F]{32}")) {
+                    addAllowedHash(result, "md5", hash.getValue());
+                }
+            }
+        }
+        for (BootstrapManifest.Package item : allPackages) {
+            if (("launcher".equals(item.installOwner) ||
+                "ignored".equals(item.installOwner)) && hasLauncherJarMd5(item)) {
+                addAllowedHash(result, "md5", item.download.md5);
+            }
+        }
+        return result;
+    }
+
+    private static boolean hasLauncherJarMd5(BootstrapManifest.Package item) {
+        return item.download != null && "jar".equals(item.download.format) &&
+            item.download.md5 != null &&
+            item.download.md5.matches("[0-9a-fA-F]{32}");
+    }
+
+    private static void addAllowedHash(
+        Map<String, Set<String>> hashes, String algorithm, String value) {
+
+        Set<String> values = hashes.get(algorithm);
+        if (values == null) {
+            values = new LinkedHashSet<String>();
+            hashes.put(algorithm, values);
+        }
+        values.add(value.toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean matchesAllowedHash(
+        Path file, Map<String, Set<String>> allowedHashes) throws LoaderException {
+
+        if (allowedHashes.isEmpty()) {
+            return false;
+        }
+        Map<String, MessageDigest> digests = new LinkedHashMap<String, MessageDigest>();
+        try {
+            for (String algorithm : allowedHashes.keySet()) {
+                String javaName;
+                if ("md5".equals(algorithm)) {
+                    javaName = "MD5";
+                } else if ("sha1".equals(algorithm)) {
+                    javaName = "SHA-1";
+                } else if ("sha512".equals(algorithm)) {
+                    javaName = "SHA-512";
+                } else {
+                    throw new LoaderException(
+                        "Unsupported launcher-owned hash algorithm: " + algorithm);
+                }
+                digests.put(algorithm, MessageDigest.getInstance(javaName));
+            }
+            try (InputStream input = Files.newInputStream(file)) {
+                byte[] buffer = HASH_BUFFER.get();
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    for (MessageDigest digest : digests.values()) {
+                        digest.update(buffer, 0, read);
+                    }
+                }
+            }
+            for (Map.Entry<String, MessageDigest> digest : digests.entrySet()) {
+                if (allowedHashes.get(digest.getKey()).contains(hex(digest.getValue().digest()))) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (IOException e) {
+            throw new LoaderException(
+                "Could not hash mod file before strict cleanup: " + file, e);
+        } catch (NoSuchAlgorithmException e) {
+            throw new LoaderException("This Java runtime cannot calculate cleanup hashes", e);
+        }
+    }
+
+    private void addProtectedModPath(Set<String> protectedPaths, String value)
+        throws LoaderException {
+
+        String relative = PathSafety.normalizeRelative(value, false);
+        String collision = PathSafety.collisionKey(relative);
+        if (collision.equals("mods") || collision.startsWith("mods/")) {
+            Path output = PathSafety.resolve(gameDirectory, relative);
+            if (loaderJar == null || !output.equals(loaderJar)) {
+                validateOutput(relative);
+            }
+            protectedPaths.add(collision);
+        }
+    }
+
+    private static boolean isLoaderRuntimeJar(Path file) {
+        String name = file.getFileName() == null
+            ? "" : file.getFileName().toString().toLowerCase(Locale.ROOT);
+        if (!name.endsWith(".jar")) {
+            return false;
+        }
+        if (name.contains("relauncher")) {
+            return true;
+        }
+        try (ZipFile archive = new ZipFile(file.toFile())) {
+            return archive.getEntry(
+                "com/juanmuscaria/relauncher/Relauncher.class") != null;
+        } catch (IOException | RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private long estimateCommitBackupBytes(
+        Set<String> stagedPaths, Set<String> removals) throws LoaderException {
+
+        Set<String> affected = new LinkedHashSet<String>();
+        affected.addAll(stagedPaths);
+        affected.addAll(removals);
+        long result = 0L;
+        for (String relative : affected) {
+            PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
+            Path existing = PathSafety.resolve(gameDirectory, relative);
+            if (Files.isRegularFile(existing, LinkOption.NOFOLLOW_LINKS)) {
+                result = DiskSpace.add(result,
+                    fileSize(existing, "file for transactional rollback: " + relative));
+            }
+        }
+        Path state = dataDirectory.resolve("state.json");
+        if (Files.isRegularFile(state, LinkOption.NOFOLLOW_LINKS)) {
+            result = DiskSpace.add(result,
+                fileSize(state, "installed state for transactional rollback"));
+        }
+        return result;
+    }
+
     private boolean isReusable(
         BootstrapManifest.Package item, InstalledState.Receipt receipt) throws LoaderException {
+
+        return isReusable(item, receipt, false);
+    }
+
+    private boolean isReusable(
+        BootstrapManifest.Package item,
+        InstalledState.Receipt receipt,
+        boolean forceOutputInspection) throws LoaderException {
+
         if (receipt == null || !item.version.equals(receipt.version) || receipt.md5 == null ||
             !item.download.md5.equalsIgnoreCase(receipt.md5) ||
             !installKey(item).equals(receipt.installKey) || receipt.files == null ||
             receipt.files.isEmpty() || receipt.hashes == null || receipt.hashes.isEmpty()) {
             return false;
         }
-        boolean inspectOutputs = item.enforcesOnLaunch();
+        boolean inspectOutputs = forceOutputInspection || item.enforcesOnLaunch();
         for (String value : receipt.files) {
             String relative = PathSafety.normalizeRelative(value, false);
             validateOutput(relative);
@@ -388,14 +756,8 @@ final class Installer {
                     result.put(entry.getKey().name, entry.getValue().get());
                 } catch (ExecutionException e) {
                     Throwable cause = e.getCause();
-                    LoaderException failure;
-                    if (cause instanceof LoaderException) {
-                        failure = (LoaderException) cause;
-                    } else {
-                        failure = new LoaderException(
-                            "Unexpected failure while downloading " + entry.getKey().name,
-                            cause);
-                    }
+                    LoaderException failure = packageFailure(
+                        "Download", entry.getKey(), cause);
                     if (firstFailure == null) {
                         firstFailure = failure;
                     }
@@ -427,8 +789,8 @@ final class Installer {
             DownloadManager.DownloadedFile file = downloaded.get(item.name);
             if (file == null) {
                 if (firstFailure == null) {
-                    firstFailure = new LoaderException(
-                        "Downloaded package is missing before verification: " + item.name);
+                    firstFailure = packageFailure("Verification", item,
+                        new LoaderException("The downloaded artifact is missing"));
                 }
                 continue;
             }
@@ -439,7 +801,7 @@ final class Installer {
                     throw failure;
                 }
                 if (firstFailure == null) {
-                    firstFailure = failure;
+                    firstFailure = packageFailure("Verification", item, failure);
                 }
             }
         }
@@ -452,12 +814,48 @@ final class Installer {
     private Map<String, StagedPackage> stageAll(
         List<BootstrapManifest.Package> pending,
         Map<String, DownloadManager.DownloadedFile> downloaded,
-        Path packagesDirectory) throws LoaderException {
+        Path packagesDirectory,
+        InstalledState previous,
+        List<BootstrapManifest.Package> selected) throws LoaderException {
 
         Map<String, StagedPackage> result = new LinkedHashMap<String, StagedPackage>();
         if (pending.isEmpty()) {
             return result;
         }
+
+        progress.phase("Inspecting downloaded packages and checking disk space...");
+        Map<String, SafeZipExtractor.Prepared> preparedZips =
+            new LinkedHashMap<String, SafeZipExtractor.Prepared>();
+        Set<String> newOutputPaths = new LinkedHashSet<String>();
+        long stagingBytes = 0L;
+        for (BootstrapManifest.Package item : pending) {
+            DownloadManager.DownloadedFile archive = downloaded.get(item.name);
+            if (archive == null) {
+                throw packageFailure("Staging", item,
+                    new LoaderException("The verified artifact is missing"));
+            }
+            if ("jar".equals(item.download.format)) {
+                stagingBytes = DiskSpace.add(stagingBytes, archive.bytes);
+                newOutputPaths.add(PathSafety.normalizeRelative(item.download.path, false));
+            } else if ("solder_zip".equals(item.download.format)) {
+                try {
+                    SafeZipExtractor.Prepared prepared =
+                        zipExtractor.prepare(archive.path, item.download.extractTo);
+                    preparedZips.put(item.name, prepared);
+                    stagingBytes = DiskSpace.add(stagingBytes, prepared.expandedBytes());
+                    newOutputPaths.addAll(prepared.outputFiles());
+                } catch (LoaderException failure) {
+                    throw packageFailure("ZIP inspection", item, failure);
+                }
+            } else {
+                throw packageFailure("Staging", item,
+                    new LoaderException("Unsupported package format: " + item.download.format));
+            }
+        }
+        long rollbackBytes = estimateRollbackBytes(
+            previous, selected, pending, newOutputPaths);
+        DiskSpace.require(dataDirectory, DiskSpace.add(stagingBytes, rollbackBytes),
+            "stage and safely commit " + pending.size() + " changed package(s)");
 
         int workers = Math.min(concurrentExtractions, pending.size());
         progress.beginInstallation(pending, workers);
@@ -474,7 +872,8 @@ final class Installer {
                 }
                 Path packageRoot = packagesDirectory.resolve(Integer.toString(index));
                 futures.put(item, executor.submit(
-                    () -> stageDownloaded(item, archive, packageRoot)));
+                    () -> stageDownloaded(item, archive, packageRoot,
+                        preparedZips.get(item.name))));
             }
             for (Map.Entry<BootstrapManifest.Package, Future<StagedPackage>> entry :
                 futures.entrySet()) {
@@ -483,11 +882,7 @@ final class Installer {
                 } catch (ExecutionException e) {
                     cancelWorkers(futures);
                     Throwable cause = e.getCause();
-                    if (cause instanceof LoaderException) {
-                        throw (LoaderException) cause;
-                    }
-                    throw new LoaderException(
-                        "Unexpected failure while staging " + entry.getKey().name, cause);
+                    throw packageFailure("Staging", entry.getKey(), cause);
                 }
             }
             return result;
@@ -503,7 +898,8 @@ final class Installer {
     private StagedPackage stageDownloaded(
         BootstrapManifest.Package item,
         DownloadManager.DownloadedFile archive,
-        Path packageRoot) throws LoaderException {
+        Path packageRoot,
+        SafeZipExtractor.Prepared preparedZip) throws LoaderException {
 
         try {
             if ("jar".equals(item.download.format)) {
@@ -523,12 +919,11 @@ final class Installer {
                     Collections.singletonList(relative), hashes);
             }
             if ("solder_zip".equals(item.download.format)) {
-                progress.installing(item, "Inspecting ZIP",
-                    "Checking archive entries before extraction...");
-                SafeZipExtractor.Prepared prepared =
-                    zipExtractor.prepare(archive.path, item.download.extractTo);
-                progress.installing(item, prepared.action(), prepared.detail());
-                SafeZipExtractor.Extraction extraction = prepared.extract(
+                if (preparedZip == null) {
+                    throw new LoaderException("The inspected ZIP plan is missing");
+                }
+                progress.installing(item, preparedZip.action(), preparedZip.detail());
+                SafeZipExtractor.Extraction extraction = preparedZip.extract(
                     packageRoot, (action, detail) ->
                         progress.installing(item, action, detail));
                 progress.installed(item);
@@ -545,6 +940,102 @@ final class Installer {
                 }
             }
         }
+    }
+
+    private long estimateRollbackBytes(
+        InstalledState previous,
+        List<BootstrapManifest.Package> selected,
+        List<BootstrapManifest.Package> pending,
+        Set<String> newOutputPaths) throws LoaderException {
+
+        Set<String> selectedNames = new LinkedHashSet<String>();
+        for (BootstrapManifest.Package item : selected) {
+            selectedNames.add(item.name);
+        }
+        Set<String> pendingNames = new LinkedHashSet<String>();
+        for (BootstrapManifest.Package item : pending) {
+            pendingNames.add(item.name);
+        }
+
+        Map<String, String> affected = new LinkedHashMap<String, String>();
+        for (String value : newOutputPaths) {
+            addAffectedPath(affected, value);
+        }
+        if (previous != null && previous.receipts != null) {
+            for (Map.Entry<String, InstalledState.Receipt> entry :
+                previous.receipts.entrySet()) {
+
+                if (!pendingNames.contains(entry.getKey()) &&
+                    selectedNames.contains(entry.getKey())) {
+                    continue;
+                }
+                InstalledState.Receipt receipt = entry.getValue();
+                if (receipt == null || receipt.files == null) {
+                    continue;
+                }
+                for (String value : receipt.files) {
+                    addAffectedPath(affected, value);
+                }
+            }
+        }
+
+        long result = 0L;
+        for (String relative : affected.values()) {
+            PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
+            Path existing = PathSafety.resolve(gameDirectory, relative);
+            if (Files.isRegularFile(existing, LinkOption.NOFOLLOW_LINKS)) {
+                result = DiskSpace.add(result, fileSize(existing,
+                    "existing file for rollback: " + relative));
+            }
+        }
+        Path state = dataDirectory.resolve("state.json");
+        if (Files.isRegularFile(state, LinkOption.NOFOLLOW_LINKS)) {
+            result = DiskSpace.add(result, fileSize(state, "installed state for rollback"));
+        }
+        return result;
+    }
+
+    private void addAffectedPath(Map<String, String> affected, String value)
+        throws LoaderException {
+
+        String relative = PathSafety.normalizeRelative(value, false);
+        validateOutput(relative);
+        affected.put(PathSafety.collisionKey(relative), relative);
+    }
+
+    private static long fileSize(Path file, String description) throws LoaderException {
+        try {
+            return Files.size(file);
+        } catch (IOException e) {
+            throw new LoaderException("Could not measure " + description, e);
+        }
+    }
+
+    private static LoaderException packageFailure(
+        String stage, BootstrapManifest.Package item, Throwable cause) {
+
+        String reason = cause == null || cause.getMessage() == null ||
+            cause.getMessage().trim().isEmpty()
+            ? (cause == null ? "Unknown failure" : cause.toString())
+            : cause.getMessage();
+        String prefix = stage + " failed for " + packageIdentity(item);
+        if (reason.regionMatches(true, 0, prefix, 0, prefix.length())) {
+            return new LoaderException(reason, cause);
+        }
+        return new LoaderException(prefix + ": " + reason, cause);
+    }
+
+    private static String packageIdentity(BootstrapManifest.Package item) {
+        String pretty = item.prettyName == null || item.prettyName.trim().isEmpty()
+            ? item.name : item.prettyName;
+        StringBuilder result = new StringBuilder(pretty);
+        if (item.version != null && !item.version.trim().isEmpty()) {
+            result.append(' ').append(item.version);
+        }
+        if (item.name != null && !item.name.equals(pretty)) {
+            result.append(" [").append(item.name).append(']');
+        }
+        return result.toString();
     }
 
     private static ThreadFactory workerThreadFactory(String prefix) {
@@ -598,25 +1089,28 @@ final class Installer {
         try {
             MessageDigest digest = MessageDigest.getInstance("MD5");
             try (InputStream input = Files.newInputStream(file)) {
-                byte[] buffer = MD5_BUFFER.get();
+                byte[] buffer = HASH_BUFFER.get();
                 int read;
                 while ((read = input.read(buffer)) >= 0) {
                     digest.update(buffer, 0, read);
                 }
             }
-            byte[] bytes = digest.digest();
-            char[] result = new char[bytes.length * 2];
-            for (int index = 0; index < bytes.length; index++) {
-                int value = bytes[index] & 0xff;
-                result[index * 2] = HEX[value >>> 4];
-                result[index * 2 + 1] = HEX[value & 0x0f];
-            }
-            return new String(result);
+            return hex(digest.digest());
         } catch (IOException e) {
             throw new LoaderException("Could not verify installed file " + file, e);
         } catch (NoSuchAlgorithmException e) {
             throw new LoaderException("This Java runtime does not provide MD5", e);
         }
+    }
+
+    private static String hex(byte[] bytes) {
+        char[] result = new char[bytes.length * 2];
+        for (int index = 0; index < bytes.length; index++) {
+            int value = bytes[index] & 0xff;
+            result[index * 2] = HEX[value >>> 4];
+            result[index * 2 + 1] = HEX[value & 0x0f];
+        }
+        return new String(result);
     }
 
     private static final class DownloadBatch {

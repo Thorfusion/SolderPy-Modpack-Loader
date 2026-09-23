@@ -15,7 +15,7 @@ final class BootstrapClient {
     private static final int CONNECT_TIMEOUT_MILLIS = 15_000;
     private static final int READ_TIMEOUT_MILLIS = 30_000;
     private static final int MAX_JSON_BYTES = 16 * 1024 * 1024;
-    private static final String USER_AGENT = "solderpy-loader/0.1";
+    private static final String USER_AGENT = "solderpy-loader/0.3.1";
 
     private final LoaderConfig config;
 
@@ -24,6 +24,7 @@ final class BootstrapClient {
     }
 
     void verifyCapability() throws LoaderException {
+        ManifestVerifier.requireConfigured(config.manifestVerification);
         Response response = get(config.apiUri, null, MAX_JSON_BYTES);
         if (response.status != 200) {
             throw statusError("Solder API discovery", response);
@@ -34,10 +35,13 @@ final class BootstrapClient {
             boolean supported = capabilities != null &&
                 capabilities.has("bootstrap_manifest") &&
                 capabilities.get("bootstrap_manifest").getAsBoolean() &&
+                capabilities.has("bootstrap_signatures") &&
+                capabilities.get("bootstrap_signatures").getAsBoolean() &&
                 capabilities.has("bootstrap_schema") &&
                 capabilities.get("bootstrap_schema").getAsInt() == 1;
             if (!supported) {
-                throw new LoaderException("The Solder server does not advertise bootstrap schema 1");
+                throw new LoaderException(
+                    "The Solder server does not advertise signed bootstrap schema 1");
             }
         } catch (JsonParseException e) {
             throw new LoaderException("Solder API discovery returned invalid JSON", e);
@@ -73,12 +77,17 @@ final class BootstrapClient {
             throw statusError("Bootstrap manifest", response);
         }
         try {
-            BootstrapManifest manifest = JsonSupport.GSON.fromJson(response.body, BootstrapManifest.class);
+            JsonObject signedManifest =
+                JsonSupport.GSON.fromJson(response.body, JsonObject.class);
+            ManifestVerifier.verify(signedManifest, config.manifestVerification);
+            BootstrapManifest manifest =
+                JsonSupport.GSON.fromJson(signedManifest, BootstrapManifest.class);
             if (manifest == null) {
                 throw new LoaderException("Bootstrap manifest response is empty");
             }
             manifest.validate(config.modpack, config.target, config.source);
-            return ManifestResponse.modified(manifest, validEtag(response.etag));
+            return ManifestResponse.modified(
+                manifest, signedManifest, validEtag(response.etag));
         } catch (JsonParseException e) {
             throw new LoaderException("Bootstrap manifest returned invalid JSON", e);
         }
@@ -154,20 +163,29 @@ final class BootstrapClient {
     static final class ManifestResponse {
         final boolean notModified;
         final BootstrapManifest manifest;
+        final JsonObject signedManifest;
         final String etag;
 
-        private ManifestResponse(boolean notModified, BootstrapManifest manifest, String etag) {
+        private ManifestResponse(
+            boolean notModified,
+            BootstrapManifest manifest,
+            JsonObject signedManifest,
+            String etag) {
+
             this.notModified = notModified;
             this.manifest = manifest;
+            this.signedManifest = signedManifest;
             this.etag = etag;
         }
 
         static ManifestResponse notModified() {
-            return new ManifestResponse(true, null, null);
+            return new ManifestResponse(true, null, null, null);
         }
 
-        static ManifestResponse modified(BootstrapManifest manifest, String etag) {
-            return new ManifestResponse(false, manifest, etag);
+        static ManifestResponse modified(
+            BootstrapManifest manifest, JsonObject signedManifest, String etag) {
+
+            return new ManifestResponse(false, manifest, signedManifest, etag);
         }
     }
 

@@ -23,6 +23,7 @@ import java.util.zip.ZipOutputStream;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class InstallerTest {
@@ -87,8 +88,8 @@ class InstallerTest {
         previous.receipts.put("old", new InstalledState.Receipt(
             "old", "1.0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "jar:mods/old.jar", Collections.singletonList("mods/old.jar"), hashes));
-        BootstrapManifest.Package launcherOwned = new BootstrapManifest.Package();
-        launcherOwned.name = "old";
+        BootstrapManifest.Package launcherOwned = jarPackage(
+            "old", "1.0", "mods/provider-name.jar", hashes.get("mods/old.jar"));
         launcherOwned.installOwner = "launcher";
         launcherOwned.bootstrapManaged = false;
         InstalledState next = new InstalledState();
@@ -156,6 +157,181 @@ class InstallerTest {
         assertFalse(Files.exists(removed));
     }
 
+    @Test
+    void strictBuildUpdateRemovesUnlistedModsButPreservesResolvedAndRuntimeFiles()
+        throws Exception {
+
+        Path mods = Files.createDirectories(gameDirectory.resolve("mods"));
+        byte[] selectedBytes = "selected".getBytes(StandardCharsets.UTF_8);
+        Path selectedFile = mods.resolve("selected.jar");
+        Path unlistedFile = mods.resolve("user-added.jar");
+        Path launcherFile = mods.resolve("native-launcher-owned.jar");
+        Path unlistedDifferentBytes = mods.resolve("another-name.jar");
+        Path relauncherFile = mods.resolve("!relauncher.jar");
+        Path loaderFile = mods.resolve("solderpy-loader.jar");
+        Files.write(selectedFile, selectedBytes);
+        Files.write(unlistedFile, "remove".getBytes(StandardCharsets.UTF_8));
+        Files.write(launcherFile, "native".getBytes(StandardCharsets.UTF_8));
+        Files.write(unlistedDifferentBytes, "wrong bytes".getBytes(StandardCharsets.UTF_8));
+        Files.write(relauncherFile, "runtime".getBytes(StandardCharsets.UTF_8));
+        Files.write(loaderFile, "loader".getBytes(StandardCharsets.UTF_8));
+
+        BootstrapManifest.Package selected = jarPackage(
+            "selected", "1.0", "mods/selected.jar", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        selected.membershipId = 1L;
+        BootstrapManifest.Package launcher = jarPackage(
+            "native", "1.0", "mods/solder-canonical-name.jar",
+            md5("native".getBytes(StandardCharsets.UTF_8)));
+        launcher.membershipId = 2L;
+        launcher.bootstrapManaged = false;
+        launcher.installOwner = "launcher";
+
+        InstalledState previous = new InstalledState();
+        previous.build = "1.0";
+        Map<String, String> hashes = new LinkedHashMap<String, String>();
+        hashes.put("mods/selected.jar", md5(selectedBytes));
+        previous.receipts.put("selected", new InstalledState.Receipt(
+            "selected", "1.0", selected.download.md5,
+            "jar:mods/selected.jar", Collections.singletonList("mods/selected.jar"), hashes));
+        InstalledState next = new InstalledState();
+        next.build = "2.0";
+
+        new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits(), loaderFile).reconcile(
+                Collections.singletonList(selected),
+                java.util.Arrays.asList(selected, launcher), previous, next, true);
+
+        assertTrue(Files.isRegularFile(selectedFile));
+        assertTrue(Files.isRegularFile(launcherFile));
+        assertTrue(Files.isRegularFile(relauncherFile));
+        assertTrue(Files.isRegularFile(loaderFile));
+        assertFalse(Files.exists(unlistedFile));
+        assertFalse(Files.exists(unlistedDifferentBytes));
+    }
+
+    @Test
+    void strictCleanupDoesNothingUntilTheInstalledBuildVersionChanges()
+        throws Exception {
+
+        Path userMod = gameDirectory.resolve("mods/user-added.jar");
+        Files.createDirectories(userMod.getParent());
+        Files.write(userMod, "preserve".getBytes(StandardCharsets.UTF_8));
+        InstalledState previous = new InstalledState();
+        previous.build = "2.0";
+        InstalledState next = new InstalledState();
+        next.build = "2.0";
+
+        new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits()).reconcile(
+                Collections.<BootstrapManifest.Package>emptyList(),
+                Collections.<BootstrapManifest.Package>emptyList(), previous, next, true);
+
+        assertTrue(Files.isRegularFile(userMod));
+    }
+
+    @Test
+    void verifiesLauncherOwnedModsByHashWithoutDeletingExtraMods() throws Exception {
+        Path mods = Files.createDirectories(gameDirectory.resolve("mods"));
+        byte[] nativeBytes = "launcher-owned".getBytes(StandardCharsets.UTF_8);
+        Path renamedNativeMod = mods.resolve("a-completely-different-name.jar");
+        Path userMod = mods.resolve("user-added.jar");
+        Files.write(renamedNativeMod, nativeBytes);
+        Files.write(userMod, "user mod".getBytes(StandardCharsets.UTF_8));
+
+        BootstrapManifest.Package launcher = jarPackage(
+            "native-mod", "2.0", "mods/provider-name.jar", md5(nativeBytes));
+        launcher.prettyName = "Native Mod";
+        launcher.membershipId = 7L;
+        launcher.bootstrapManaged = false;
+        launcher.installOwner = "launcher";
+
+        new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits()).reconcile(
+                Collections.<BootstrapManifest.Package>emptyList(),
+                Collections.singletonList(launcher), new InstalledState(),
+                new InstalledState(), false);
+
+        assertTrue(Files.isRegularFile(renamedNativeMod));
+        assertTrue(Files.isRegularFile(userMod));
+    }
+
+    @Test
+    void missingLauncherOwnedHashStopsLaunchWithoutDeletingAnything() throws Exception {
+        Path mods = Files.createDirectories(gameDirectory.resolve("mods"));
+        Path wrongVersion = mods.resolve("native-mod.jar");
+        Files.write(wrongVersion, "wrong version".getBytes(StandardCharsets.UTF_8));
+
+        BootstrapManifest.Package launcher = jarPackage(
+            "native-mod", "2.0", "mods/provider-name.jar",
+            md5("expected version".getBytes(StandardCharsets.UTF_8)));
+        launcher.prettyName = "Native Mod";
+        launcher.membershipId = 7L;
+        launcher.bootstrapManaged = false;
+        launcher.installOwner = "launcher";
+
+        RecoverableBootstrapException error = assertThrows(
+            RecoverableBootstrapException.class, () ->
+                new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+                    new LoaderConfig.Limits()).reconcile(
+                        Collections.<BootstrapManifest.Package>emptyList(),
+                        Collections.singletonList(launcher), new InstalledState(),
+                        new InstalledState(), false));
+
+        assertTrue(error.getMessage().contains(
+            "Missing or wrong version: Native Mod 2.0 [native-mod]"));
+        assertTrue(Files.isRegularFile(wrongVersion));
+    }
+
+    @Test
+    void disabledStrictCleanupPreservesUserModsAcrossBuildChanges()
+        throws Exception {
+
+        Path userMod = gameDirectory.resolve("mods/user-added.jar");
+        Files.createDirectories(userMod.getParent());
+        Files.write(userMod, "preserve".getBytes(StandardCharsets.UTF_8));
+        InstalledState previous = new InstalledState();
+        previous.build = "1.0";
+        InstalledState next = new InstalledState();
+        next.build = "2.0";
+
+        new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits()).reconcile(
+                Collections.<BootstrapManifest.Package>emptyList(),
+                Collections.<BootstrapManifest.Package>emptyList(), previous, next, false);
+
+        assertTrue(Files.isRegularFile(userMod));
+    }
+
+    @Test
+    void strictCleanupRefusesLauncherOwnedZipWithoutInstalledFileHashes() throws Exception {
+        Path nativeMod = gameDirectory.resolve("mods/upstream-name.jar");
+        Files.createDirectories(nativeMod.getParent());
+        Files.write(nativeMod, "native".getBytes(StandardCharsets.UTF_8));
+        BootstrapManifest.Package launcher = jarPackage(
+            "native", "1.0", "mods/solder-name.jar",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        launcher.membershipId = 9L;
+        launcher.bootstrapManaged = false;
+        launcher.installOwner = "launcher";
+        launcher.download.format = "solder_zip";
+        launcher.download.path = null;
+        launcher.download.extractTo = ".";
+        InstalledState previous = new InstalledState();
+        previous.build = "1.0";
+        InstalledState next = new InstalledState();
+        next.build = "2.0";
+
+        RecoverableBootstrapException error = assertThrows(
+            RecoverableBootstrapException.class, () ->
+                new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+                    new LoaderConfig.Limits()).reconcile(
+                        Collections.<BootstrapManifest.Package>emptyList(),
+                        Collections.singletonList(launcher), previous, next, true));
+
+        assertTrue(error.getMessage().contains("raw JAR MD5"));
+        assertTrue(Files.isRegularFile(nativeMod));
+    }
+
     private void verifyUpdatedPackageOmission(boolean enforce)
         throws Exception {
 
@@ -220,6 +396,21 @@ class InstallerTest {
         return bytes.toByteArray();
     }
 
+    private static BootstrapManifest.Package jarPackage(
+        String name, String version, String path, String artifactMd5) {
+
+        BootstrapManifest.Package item = new BootstrapManifest.Package();
+        item.name = name;
+        item.version = version;
+        item.bootstrapManaged = true;
+        item.installOwner = "loader";
+        item.download = new BootstrapManifest.Download();
+        item.download.md5 = artifactMd5;
+        item.download.format = "jar";
+        item.download.path = path;
+        return item;
+    }
+
     private static void send(HttpExchange exchange, byte[] body) throws IOException {
         exchange.sendResponseHeaders(200, body.length);
         try (OutputStream output = exchange.getResponseBody()) {
@@ -228,7 +419,11 @@ class InstallerTest {
     }
 
     private static String md5(byte[] bytes) throws Exception {
-        byte[] digest = MessageDigest.getInstance("MD5").digest(bytes);
+        return digest("MD5", bytes);
+    }
+
+    private static String digest(String algorithm, byte[] bytes) throws Exception {
+        byte[] digest = MessageDigest.getInstance(algorithm).digest(bytes);
         StringBuilder value = new StringBuilder();
         for (byte item : digest) {
             value.append(String.format(Locale.ROOT, "%02x", item & 0xff));

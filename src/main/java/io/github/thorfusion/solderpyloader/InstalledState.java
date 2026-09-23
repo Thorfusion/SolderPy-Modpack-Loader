@@ -1,5 +1,6 @@
 package io.github.thorfusion.solderpyloader;
 
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 
 import java.io.IOException;
@@ -28,6 +29,7 @@ final class InstalledState {
     String manifestHash;
     String etag;
     BootstrapManifest manifest;
+    JsonObject signedManifest;
     List<Long> selectedMemberships;
     List<RememberedSelection> selectedOptions;
     Map<String, Receipt> receipts = new LinkedHashMap<String, Receipt>();
@@ -130,7 +132,8 @@ final class InstalledState {
             config.target.equals(target) && Objects.equals(config.source, source) &&
             Objects.equals(config.platform, platform) &&
             Objects.equals(config.launcherOwnedMemberships,
-                launcherOwnedMemberships) && manifest != null &&
+                launcherOwnedMemberships) &&
+            manifest != null &&
             Objects.equals(config.source, manifest.source);
     }
 }

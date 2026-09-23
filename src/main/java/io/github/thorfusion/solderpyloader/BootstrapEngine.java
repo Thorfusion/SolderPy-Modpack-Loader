@@ -1,5 +1,7 @@
 package io.github.thorfusion.solderpyloader;
 
+import com.google.gson.JsonObject;
+
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
@@ -69,6 +71,7 @@ final class BootstrapEngine {
             next.manifestHash = plan.manifest.manifestHash;
             next.etag = plan.etag;
             next.manifest = plan.manifest;
+            next.signedManifest = plan.signedManifest.deepCopy();
             next.selectedMemberships = new ArrayList<Long>(plan.requestedMemberships);
             next.selectedOptions = rememberedSelections(
                 plan.manifest, plan.requestedMemberships);
@@ -78,9 +81,18 @@ final class BootstrapEngine {
                 paths.gameDirectory(), paths.dataDirectory(), config.limits,
                 paths.loaderJar(), progress);
             installer.reconcile(
-                plan.selected, plan.manifest.packages, previous, next);
+                plan.selected, plan.manifest.packages, previous, next,
+                plan.manifest.removesUnlistedModFiles());
             LoaderLog.info("Modpack is ready (" + plan.selected.size() +
                 " managed package(s))");
+        } catch (LaunchCancelledException e) {
+            throw e;
+        } catch (LoaderException e) {
+            progress.failed(e);
+            throw e;
+        } catch (RuntimeException e) {
+            progress.failed(e);
+            throw e;
         } finally {
             progress.close();
         }
@@ -93,23 +105,43 @@ final class BootstrapEngine {
         try {
             BootstrapClient client = new BootstrapClient(config);
             client.verifyCapability();
+            BootstrapManifest cachedManifest = null;
+            JsonObject cachedSignedManifest = null;
+            if (samePack && previous.signedManifest != null) {
+                try {
+                    ManifestVerifier.verify(
+                        previous.signedManifest, config.manifestVerification);
+                    cachedManifest = JsonSupport.GSON.fromJson(
+                        previous.signedManifest, BootstrapManifest.class);
+                    cachedManifest.validate(config.modpack, config.target, config.source);
+                    cachedSignedManifest = previous.signedManifest;
+                } catch (LoaderException | RuntimeException error) {
+                    LoaderLog.warn(
+                        "The cached manifest signature is invalid; requesting a complete manifest");
+                    cachedManifest = null;
+                    cachedSignedManifest = null;
+                }
+            }
             BootstrapClient.ManifestResponse response = client.fetchManifest(
                 samePack ? previous.build : null,
-                samePack ? previous.etag : null);
+                cachedSignedManifest == null ? null : previous.etag);
 
             BootstrapManifest manifest;
+            JsonObject signedManifest;
             String etag;
             boolean manifestUnchanged;
             if (response.notModified) {
-                if (previous.manifest == null) {
-                    throw new LoaderException("Server returned 304 but no cached manifest is available");
+                if (cachedManifest == null || cachedSignedManifest == null) {
+                    throw new LoaderException(
+                        "Server returned 304 but no verified cached manifest is available");
                 }
-                manifest = previous.manifest;
-                manifest.validate(config.modpack, config.target, config.source);
+                manifest = cachedManifest;
+                signedManifest = cachedSignedManifest;
                 etag = previous.etag;
                 manifestUnchanged = true;
             } else {
                 manifest = response.manifest;
+                signedManifest = response.signedManifest;
                 etag = response.etag;
                 manifestUnchanged = samePack && sameManifest(previous, manifest);
                 LoaderLog.info("Resolved " + manifest.modpack.name + " build " + manifest.build.version);
@@ -141,7 +173,8 @@ final class BootstrapEngine {
             }
             List<BootstrapManifest.Package> selected =
                 SelectionResolver.resolve(manifest, requestedMemberships);
-            return new UpdatePlan(manifest, etag, requestedMemberships, selected);
+            return new UpdatePlan(
+                manifest, signedManifest, etag, requestedMemberships, selected);
         } catch (LaunchCancelledException e) {
             throw e;
         } catch (RecoverableBootstrapException e) {
@@ -307,17 +340,20 @@ final class BootstrapEngine {
 
     private static final class UpdatePlan {
         private final BootstrapManifest manifest;
+        private final JsonObject signedManifest;
         private final String etag;
         private final Collection<Long> requestedMemberships;
         private final List<BootstrapManifest.Package> selected;
 
         private UpdatePlan(
             BootstrapManifest manifest,
+            JsonObject signedManifest,
             String etag,
             Collection<Long> requestedMemberships,
             List<BootstrapManifest.Package> selected) {
 
             this.manifest = manifest;
+            this.signedManifest = signedManifest;
             this.etag = etag;
             this.requestedMemberships = new ArrayList<Long>(requestedMemberships);
             this.selected = selected;

@@ -80,6 +80,19 @@ jobs:
           '${{ steps.artifact.outputs.file }}'
           '${{ steps.artifact.outputs.version }}'
 
+      - name: Scan bundled dependencies
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: rootfs
+          scan-ref: build/libs
+          version: v0.74.0
+          format: table
+          exit-code: '1'
+          scanners: vuln
+          ignore-unfixed: false
+          vuln-type: library
+          severity: MEDIUM,HIGH,CRITICAL
+
       - name: Publish release to Maven
         shell: bash
         env:
