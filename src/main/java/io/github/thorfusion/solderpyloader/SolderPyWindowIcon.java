@@ -12,7 +12,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-/** Applies the packaged SolderPy Loader logo to Swing windows. */
+/** Applies the packaged SolderPy Modpack Loader logo to Swing windows. */
 final class SolderPyWindowIcon {
     private static final String RESOURCE = "/assets/solderpyloader/icon.png";
     private static final int[] SIZES = {16, 24, 32, 48, 64, 128, 256};

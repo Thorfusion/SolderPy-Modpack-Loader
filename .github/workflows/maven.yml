@@ -135,7 +135,7 @@ jobs:
           modrinth-dependencies: |
             zCFNaupz(required)
           files: output/${{ needs.build.outputs.artifact_name }}
-          name: SolderPy Loader ${{ needs.build.outputs.project_version }}
+          name: SolderPy Modpack Loader ${{ needs.build.outputs.project_version }}
           version: ${{ needs.build.outputs.project_version }}
           version-type: ${{ github.event.release.prerelease && 'beta' || 'release' }}
           changelog: ${{ github.event.release.body }}
@@ -169,7 +169,7 @@ jobs:
           curseforge-dependencies: |
             1491728(required)
           files: output/${{ needs.build.outputs.artifact_name }}
-          name: SolderPy Loader ${{ needs.build.outputs.project_version }}
+          name: SolderPy Modpack Loader ${{ needs.build.outputs.project_version }}
           version: ${{ needs.build.outputs.project_version }}
           version-type: ${{ github.event.release.prerelease && 'beta' || 'release' }}
           changelog: ${{ github.event.release.body }}

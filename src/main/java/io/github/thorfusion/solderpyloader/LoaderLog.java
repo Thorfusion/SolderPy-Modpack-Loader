@@ -1,7 +1,7 @@
 package io.github.thorfusion.solderpyloader;
 
 final class LoaderLog {
-    private static final String PREFIX = "[solder.py Loader] ";
+    private static final String PREFIX = "[SolderPy Modpack Loader] ";
 
     private LoaderLog() {
     }

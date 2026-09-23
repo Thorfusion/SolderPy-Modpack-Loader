@@ -35,7 +35,8 @@ final class BootstrapEngine {
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock lock = tryLock(channel)) {
             if (lock == null) {
-                throw new LoaderException("Another solder.py loader update is already running");
+                throw new LoaderException(
+                    "Another SolderPy Modpack Loader update is already running");
             }
             updateLocked();
         } catch (IOException e) {

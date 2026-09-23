@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/solderpy-loader-logo.png" alt="SolderPy Loader logo" width="192">
+  <img src="assets/solderpy-loader-logo.png" alt="SolderPy Modpack Loader logo" width="192">
 </p>
 
-# SolderPy Loader
+# SolderPy Modpack Loader
 
 ## Workflow with solder.py
 
@@ -13,9 +13,9 @@
 5. If the mod has been linked to its CurseForge project, solder.py resolves the corresponding CurseForge modpack format.
 6. When the mod is updated through Modrinth, solder.py keeps one version record that can be exported in the native formats for Modrinth and CurseForge while remaining available through Technic.
 
-### Where SolderPy Loader comes in
+### Where SolderPy Modpack Loader comes in
 
-Modrinth, CurseForge, and Technic all have different distribution capabilities and limitations. Native platform downloads are used whenever possible, while SolderPy Loader handles content and features that the platforms cannot provide consistently:
+Modrinth, CurseForge, and Technic all have different distribution capabilities and limitations. Native platform downloads are used whenever possible, while SolderPy Modpack Loader handles content and features that the platforms cannot provide consistently:
 
 - Rich optional-content selection for players.
 - Distribution of configuration files, custom mods, resource packs, and other pack-specific content without publishing each item as a separate Modrinth or CurseForge project.
@@ -25,20 +25,20 @@ Modrinth, CurseForge, and Technic all have different distribution capabilities a
 
 This approach lets solder.py remain the single source of truth while each platform uses its native download system wherever possible.
 
-SolderPy Loader is a loader-neutral Minecraft bootstrap mod for the
+SolderPy Modpack Loader is a loader-neutral Minecraft bootstrap mod for the
 [solder.py bootstrap API](https://github.com/Thorfusion/solder.py/blob/dev/docs/bootstrap-api.md).
 It updates a pack before mod discovery, presents API-defined optional content,
 and works on both clients and dedicated servers.
 
 The loader uses [Relauncher](https://github.com/juanmuscaria/relauncher) to
-perform one controlled JVM restart with SolderPy Loader attached as a Java
+perform one controlled JVM restart with SolderPy Modpack Loader attached as a Java
 agent. This lets it prepare files before Forge, NeoForge, Fabric, or Quilt scans
 the instance.
 
 > [!IMPORTANT]
 > Use native Modrinth and CurseForge downloads whenever their policies require
 > them. Only host artifacts through solder.py when you have permission to
-> redistribute them. SolderPy Loader does not grant redistribution rights.
+> redistribute them. SolderPy Modpack Loader does not grant redistribution rights.
 
 ## Why use it?
 
@@ -64,7 +64,7 @@ pack builds:
 3. Export platform-native references for Modrinth and CurseForge.
 4. Keep the same version available through Solder for Technic and other
    supported launch paths.
-5. Let SolderPy Loader deliver pack-specific content that native manifests
+5. Let SolderPy Modpack Loader deliver pack-specific content that native manifests
    cannot express consistently, including interactive optionals, configuration,
    resource packs, custom content, Maven/GitHub-managed files, and server
    installation.
@@ -87,7 +87,7 @@ includes a Forge 1.7.10 exit-handling workaround.
 
 ## Installation
 
-1. Put the SolderPy Loader release JAR in the instance's top-level `mods/`
+1. Put the SolderPy Modpack Loader release JAR in the instance's top-level `mods/`
    directory.
 2. Put the matching Relauncher 1.1.1 JAR beside it.
 3. Create `config/solderpy-loader.json` using the example below.
@@ -98,8 +98,13 @@ For CurseForge, use `relauncher-universal-1.1.1-curseforge.jar`. The
 CurseForge edition intentionally omits bundled native libraries and uses
 Relauncher's pure-Java fallback.
 
-SolderPy Loader does not bundle Relauncher or its native libraries. Its own
+SolderPy Modpack Loader does not bundle Relauncher or its native libraries. Its own
 runtime dependencies are shaded and relocated inside the release JAR.
+
+For upgrade compatibility, existing technical identifiers retain the original
+`solderpy-loader` slug: release JAR names, the Maven artifact ID,
+`config/solderpy-loader.json`, `.solderpy-loader/`, Java package names, and the
+HTTP user agent. The displayed product name is SolderPy Modpack Loader.
 
 ## Configuration
 
@@ -162,9 +167,9 @@ as Modrinth or Maven, and the Solder-hosted artifact as the final fallback.
 `source: "solder"` means the native platform does not own ordinary build
 packages; it does not force their bytes to come only from Solder hosting.
 `source: "hybrid"` lets the native platform install exact supported matches
-and leaves the remaining packages to SolderPy Loader.
+and leaves the remaining packages to SolderPy Modpack Loader.
 
-Set `platform` only when SolderPy Loader was installed by the matching native
+Set `platform` only when SolderPy Modpack Loader was installed by the matching native
 export. The API keeps the complete dependency graph and labels every package's
 `install_owner` as `loader`, `launcher`, or `ignored`. Launcher-owned packages
 remain visible for dependency resolution but are never downloaded twice.
@@ -175,13 +180,13 @@ request `ownership=explicit` and apply that list over the server's ownership
 inference. Do not copy these build-local IDs between builds. `null` uses server
 inference, while `[]` explicitly makes every non-ignored package Loader-owned.
 Technic normally uses server-owned inference: its normal required packages can
-remain launcher-owned while SolderPy Loader manages optional and advanced
+remain launcher-owned while SolderPy Modpack Loader manages optional and advanced
 content. Manual installations should normally leave both `platform` and
 `launcherOwnedMemberships` as `null`.
 
 ## Optional content
 
-On the first graphical client launch, SolderPy Loader displays the optionals
+On the first graphical client launch, SolderPy Modpack Loader displays the optionals
 provided by the bootstrap manifest:
 
 - Basic and ungrouped options use checkboxes.
@@ -210,7 +215,7 @@ defaults.
 ## Download and installation behavior
 
 The bootstrap is split into distinct phases so network, verification, and disk
-work remain visible. On graphical clients, one SolderPy Loader status window is
+work remain visible. On graphical clients, one SolderPy Modpack Loader status window is
 shown before manifest resolution and remains open behind the optional-content
 selector. After the player continues, the same window immediately shows the
 installed-file check instead of leaving an unexplained blank interval:
@@ -243,7 +248,7 @@ from immediately aborting launch.
 
 ### JAR and ZIP package handling
 
-SolderPy Loader verifies and stages a package before changing the live game
+SolderPy Modpack Loader verifies and stages a package before changing the live game
 directory. The downloaded artifact's size and MD5 must match the manifest. A
 failed verification is retried according to the download rules above and the
 untrusted artifact is never installed.
@@ -275,7 +280,7 @@ traversal, symbolic links, oversized artifacts, excessive expanded data, and
 excessive entry counts are rejected.
 
 The built-in extractor calculates each file's MD5 while writing it. When
-7-Zip is used, SolderPy Loader separately walks the extracted result, checks
+7-Zip is used, SolderPy Modpack Loader separately walks the extracted result, checks
 that every expected entry exists with the expected size, rejects unexpected
 entries, and calculates every file's MD5 before staging it. The live game
 directory is changed only after all selected packages have downloaded,
@@ -283,12 +288,12 @@ verified, and staged successfully.
 
 ### Existing files, repairs, and user-added files
 
-SolderPy Loader records only the paths it owns, together with their installed
+SolderPy Modpack Loader records only the paths it owns, together with their installed
 MD5 values, in `.solderpy-loader/state.json`. It checks every selected managed
 file against that receipt on later launches. It does not wipe or generally
 clean the `mods`, `config`, `resourcepacks`, or other game directories.
 
-| File situation | SolderPy Loader behavior |
+| File situation | SolderPy Modpack Loader behavior |
 | --- | --- |
 | The target path does not exist before its first managed installation | Installs the packaged file and records ownership and its MD5. |
 | A file already exists at the target path and has the expected MD5 | Leaves the existing file in place and records ownership. Its contents do not need to be rewritten. |
@@ -361,7 +366,7 @@ With `failOpen: false`, any update failure stops the launch. With
 `failOpen: true`, startup may continue only if the complete previous
 installation can be verified.
 
-To make SolderPy Loader forget the saved build and optional selections, delete:
+To make SolderPy Modpack Loader forget the saved build and optional selections, delete:
 
 ```text
 .solderpy-loader/state.json
@@ -374,7 +379,7 @@ launch behave like a fresh reconciliation.
 
 There are two separate Java choices:
 
-- **Game JVM:** Relauncher starts Minecraft. SolderPy Loader declares support
+- **Game JVM:** Relauncher starts Minecraft. SolderPy Modpack Loader declares support
   for Java majors 8 through 26, so legacy packs can remain on Java 8.
 - **Bootstrap worker JVM:** Downloads, hashing, and extraction run in a
   short-lived child process. The loader prefers `bootstrapJavaMajor` (Java 25

@@ -89,8 +89,8 @@ final class SafeZipExtractor {
 
         String detail() {
             return useSevenZip
-                ? "SolderPy Loader is using the accelerated extractor. This can take a while."
-                : "SolderPy Loader is extracting and verifying the archive. This can take a while.";
+                ? "SolderPy Modpack Loader is using the accelerated extractor. This can take a while."
+                : "SolderPy Modpack Loader is extracting and verifying the archive. This can take a while.";
         }
 
         Extraction extract(Path stagingRoot) throws LoaderException {
@@ -121,7 +121,7 @@ final class SafeZipExtractor {
             if (!sevenZip.extract(archive, externalRoot)) {
                 deleteTree(externalRoot);
                 externalRoot = null;
-                notifyProgress(listener, "Extracting ZIP with SolderPy Loader",
+                notifyProgress(listener, "Extracting ZIP with SolderPy Modpack Loader",
                     "The accelerated extractor was unavailable; using the built-in extractor...");
                 return extractBuiltIn(archive, extractTo, stagingRoot);
             }

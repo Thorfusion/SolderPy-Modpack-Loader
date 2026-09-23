@@ -1,6 +1,6 @@
 # Third-party software notices
 
-SolderPy Loader includes relocated copies of the following libraries. These
+SolderPy Modpack Loader includes relocated copies of the following libraries. These
 components remain licensed under the Apache License 2.0; the project's
 all-rights-reserved license does not replace their licenses.
 

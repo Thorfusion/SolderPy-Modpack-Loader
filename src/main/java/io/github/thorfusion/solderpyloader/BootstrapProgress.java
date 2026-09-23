@@ -81,7 +81,7 @@ final class BootstrapProgress implements AutoCloseable {
             runOnEventThreadAndWait(() -> {
                 ensureDialog();
                 showSingleActivity();
-                titleLabel.setText("Loading SolderPy Loader");
+                titleLabel.setText("Loading SolderPy Modpack Loader");
                 phaseLabel.setText(message);
                 overall.setMinimum(0);
                 overall.setMaximum(1);
@@ -97,10 +97,10 @@ final class BootstrapProgress implements AutoCloseable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             graphical = false;
-            LoaderLog.warn("SolderPy Loader status window was interrupted; continuing in the log");
+            LoaderLog.warn("SolderPy Modpack Loader status window was interrupted; continuing in the log");
         } catch (InvocationTargetException | RuntimeException e) {
             graphical = false;
-            LoaderLog.warn("Could not display SolderPy Loader status; continuing in the log");
+            LoaderLog.warn("Could not display SolderPy Modpack Loader status; continuing in the log");
         }
     }
 
@@ -110,7 +110,7 @@ final class BootstrapProgress implements AutoCloseable {
         runOnEventThread(() -> {
             showSingleActivity();
             if (titleLabel != null) {
-                titleLabel.setText("SolderPy Loader");
+                titleLabel.setText("SolderPy Modpack Loader");
             }
             if (phaseLabel != null) {
                 phaseLabel.setText("Waiting for optional content selection...");
@@ -396,7 +396,7 @@ final class BootstrapProgress implements AutoCloseable {
         runOnEventThread(() -> {
             showSingleActivity();
             if (titleLabel != null) {
-                titleLabel.setText("Finishing SolderPy Loader update");
+                titleLabel.setText("Finishing SolderPy Modpack Loader update");
             }
             if (phaseLabel != null) {
                 phaseLabel.setText(message);
@@ -440,7 +440,7 @@ final class BootstrapProgress implements AutoCloseable {
     }
 
     private void createDialog() {
-        dialog = new JDialog((Frame) null, "SolderPy Loader", false);
+        dialog = new JDialog((Frame) null, "SolderPy Modpack Loader", false);
         SolderPyWindowIcon.apply(dialog);
         dialog.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
 
@@ -449,7 +449,7 @@ final class BootstrapProgress implements AutoCloseable {
 
         JPanel heading = new JPanel();
         heading.setLayout(new BoxLayout(heading, BoxLayout.Y_AXIS));
-        titleLabel = new JLabel("Loading SolderPy Loader");
+        titleLabel = new JLabel("Loading SolderPy Modpack Loader");
         titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 20.0f));
         titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
         heading.add(titleLabel);
@@ -473,7 +473,7 @@ final class BootstrapProgress implements AutoCloseable {
 
         currentPanel = new JPanel(new BorderLayout(4, 6));
         currentPanel.setBorder(BorderFactory.createTitledBorder("Current package"));
-        currentLabel = new JLabel("Starting SolderPy Loader...");
+        currentLabel = new JLabel("Starting SolderPy Modpack Loader...");
         currentProgress = new JProgressBar(0, 1000);
         currentProgress.setStringPainted(true);
         currentProgress.setIndeterminate(true);

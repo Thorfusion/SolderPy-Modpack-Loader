@@ -63,7 +63,7 @@ jar {
             'Premain-Class': 'io.github.thorfusion.solderpyloader.SolderPyAgent',
             'Can-Redefine-Classes': 'false',
             'Can-Retransform-Classes': 'false',
-            'Implementation-Title': 'SolderPy Loader',
+            'Implementation-Title': 'SolderPy Modpack Loader',
             'Implementation-Version': project.version
         )
     }
@@ -118,8 +118,8 @@ publishing {
             artifactId = 'solderpy-loader'
 
             pom {
-                name = 'SolderPy Loader'
-                description = 'Loader-neutral Minecraft bootstrap mod for solder.py modpacks'
+                name = 'SolderPy Modpack Loader'
+                description = 'Cross-loader Minecraft modpack bootstrap agent for solder.py modpacks'
                 url = 'https://github.com/Thorfusion/solderpy_loader'
                 licenses {
                     license {
