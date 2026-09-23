@@ -15,7 +15,7 @@ final class BootstrapClient {
     private static final int CONNECT_TIMEOUT_MILLIS = 15_000;
     private static final int READ_TIMEOUT_MILLIS = 30_000;
     private static final int MAX_JSON_BYTES = 16 * 1024 * 1024;
-    private static final String USER_AGENT = "solderpy-loader/0.3.1";
+    private static final String USER_AGENT = "solderpy-loader/0.3.2";
 
     private final LoaderConfig config;
 
