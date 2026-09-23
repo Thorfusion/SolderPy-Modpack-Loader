@@ -80,9 +80,16 @@ final class BootstrapManifest {
         String modtype;
         @SerializedName("install_owner") String installOwner;
         @SerializedName("bootstrap_managed") boolean bootstrapManaged;
+        Boolean enforce;
         Download download;
         Selection selection;
         List<Dependency> dependencies = new ArrayList<Dependency>();
+
+        boolean enforcesOnLaunch() {
+            // The field was added to schema version 1. Older cached manifests
+            // therefore retain the original verification and repair behavior.
+            return enforce == null || enforce.booleanValue();
+        }
     }
 
     static final class Download {

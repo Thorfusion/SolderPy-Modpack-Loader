@@ -265,24 +265,29 @@ final class Installer {
 
     private boolean isReusable(
         BootstrapManifest.Package item, InstalledState.Receipt receipt) throws LoaderException {
-        if (receipt == null || receipt.files == null || receipt.files.isEmpty() ||
-            receipt.hashes == null || receipt.hashes.isEmpty() ||
-            !item.version.equals(receipt.version) || receipt.md5 == null ||
+        if (receipt == null || !item.version.equals(receipt.version) || receipt.md5 == null ||
             !item.download.md5.equalsIgnoreCase(receipt.md5) ||
-            !installKey(item).equals(receipt.installKey)) {
+            !installKey(item).equals(receipt.installKey) || receipt.files == null ||
+            receipt.files.isEmpty() || receipt.hashes == null || receipt.hashes.isEmpty()) {
             return false;
         }
+        boolean inspectOutputs = item.enforcesOnLaunch();
         for (String value : receipt.files) {
             String relative = PathSafety.normalizeRelative(value, false);
             validateOutput(relative);
+            String expectedHash = receipt.hashes.get(relative);
+            if (expectedHash == null || !expectedHash.matches("[0-9a-fA-F]{32}")) {
+                return false;
+            }
+            if (!inspectOutputs) {
+                continue;
+            }
             PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
             Path file = PathSafety.resolve(gameDirectory, relative);
             if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
                 return false;
             }
-            String expectedHash = receipt.hashes.get(relative);
-            if (expectedHash == null || !expectedHash.matches("[0-9a-fA-F]{32}") ||
-                !expectedHash.equalsIgnoreCase(md5(file))) {
+            if (!expectedHash.equalsIgnoreCase(md5(file))) {
                 return false;
             }
         }

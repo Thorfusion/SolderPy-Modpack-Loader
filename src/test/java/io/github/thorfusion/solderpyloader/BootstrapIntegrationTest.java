@@ -156,6 +156,16 @@ class BootstrapIntegrationTest {
         assertTrue(manifest.packages.get(0).bootstrapManaged);
     }
 
+    @Test
+    void defaultsOlderSchemaOnePackagesToLaunchEnforcement() throws Exception {
+        BootstrapManifest.Package item = manifest(1234, new byte[] {1}).packages.get(0);
+
+        assertTrue(item.enforcesOnLaunch());
+        BootstrapManifest.Package disabled = JsonSupport.GSON.fromJson(
+            "{\"enforce\":false}", BootstrapManifest.Package.class);
+        assertFalse(disabled.enforcesOnLaunch());
+    }
+
     private static BootstrapManifest manifest(int port, byte[] jarBytes) throws Exception {
         BootstrapManifest manifest = new BootstrapManifest();
         manifest.schema = "solder.py/bootstrap";

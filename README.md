@@ -302,7 +302,8 @@ clean the `mods`, `config`, `resourcepacks`, or other game directories.
 | A managed file is missing, corrupted, or manually edited | Marks the package for repair. The verified artifact is reused from the cache when possible or downloaded again, and the package is staged again. Missing or mismatching outputs are restored; outputs that already match are left untouched. |
 | A user adds a file at a path that is not listed in any ownership receipt | Ignores and preserves it, including extra files placed beside managed mods or configs. |
 | A user-added file occupies a path required by a selected package | Treats the path as a package output: an identical file is adopted, while a different file is replaced by the packaged version. |
-| An updated package no longer contains one of its former files, or the package is removed/deselected | Deletes the former output only when it still matches the old receipt. A locally modified or unverifiable former output is preserved and becomes unmanaged. |
+| An updated package no longer contains one of its former files | Deletes the former output only when it still matches the old receipt. A locally modified or unverifiable former output is preserved and becomes unmanaged. |
+| A package is removed or deselected | Deletes its former outputs only when they still match the old receipt. Locally modified or unverifiable outputs are preserved and become unmanaged. |
 | A package changes from Loader ownership to launcher ownership | Drops the Loader receipt without deleting the launcher's file. |
 | Two selected managed packages claim the same output path | Stops the update with an error instead of choosing one package or silently overwriting the other. |
 
@@ -311,6 +312,17 @@ deliberate edit to a managed config is also considered a mismatch and is
 restored from its package. Files created by Minecraft or a mod after
 installation are not repaired or deleted unless their exact paths were also
 declared as outputs of a managed package.
+
+The API's `enforce` setting controls whether an unchanged
+package is enforced on every launch. With the default `true`, the Loader
+verifies all owned outputs and repairs missing or modified files. With `false`,
+the Loader trusts the existing receipt and does not inspect, repair, download,
+or extract that package while its version, artifact MD5, and install target are
+unchanged. Users and mods can therefore change or remove its files between
+updates. When its package identity changes, such as an update from `2.0.0` to
+`2.0.1`, the new package is installed normally and its managed files are reset
+to the new version. Initial installation, update transactions, and normal
+ownership-safe cleanup still apply for either setting.
 
 ## State, updates, and reset
 
