@@ -44,11 +44,15 @@ final class BootstrapEngine {
     }
 
     private void updateLocked() throws LoaderException {
-        InstalledState previous = InstalledState.load(paths.dataDirectory());
-        boolean samePack = previous.matches(config);
         BootstrapProgress progress = BootstrapProgress.create(
             "client".equals(config.target) && OptionalSelectionScreen.isAvailable());
         try {
+            progress.beginPreparation("Checking for interrupted updates...");
+            InstallTransaction.recoverPending(
+                paths.gameDirectory(), paths.dataDirectory(), paths.loaderJar());
+            InstalledState previous = InstalledState.load(paths.dataDirectory());
+            boolean samePack = previous.matches(config);
+
             progress.beginPreparation("Loading modpack information...");
             UpdatePlan plan = prepareUpdate(previous, samePack, progress);
 

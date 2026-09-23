@@ -324,7 +324,39 @@ location, output paths, and installed file hashes. The repair and preservation
 rules are described in the preceding section.
 
 Updates are staged away from the live instance and committed only after all
-required work succeeds. A failed commit restores the previous files and state.
+required work succeeds. Before changing any live path, the loader writes a
+persistent transaction journal under `.solderpy-loader/transactions/`, copies
+every file that will be replaced or removed, and saves the previous
+`state.json`. It then marks the backups ready, applies the files, saves the new
+state, and writes the final commit marker. Backup files are flushed to storage
+before live changes begin.
+
+A normal commit failure is rolled back immediately. If the JVM, launcher, or
+computer stops after live changes have started, the journal and backups remain
+on disk. At the beginning of the next launch—and before loading state or
+contacting the API—the loader scans for interrupted transactions:
+
+- A transaction without its final commit marker is rolled back to the previous
+  files and previous `state.json`.
+- A transaction with its final commit marker is already complete; the loader
+  preserves the new files and removes only the leftover transaction data.
+- Recovery is repeatable. If another interruption occurs while rolling back,
+  the retained copies allow the following launch to retry the same rollback.
+- Missing, malformed, or unsafe recovery data stops the launch instead of
+  guessing and potentially deleting user files.
+
+The multi-file commit is therefore crash-recoverable, although it is not a
+single filesystem operation: files can briefly be in an intermediate state
+during the commit itself. Minecraft does not continue until the commit or any
+required recovery has finished. Transaction backups require temporary disk
+space approximately equal to the live files being replaced or removed and are
+deleted after a successful commit or rollback.
+
+Do not manually delete `.solderpy-loader/transactions/` while recovery is
+pending; it may contain the only retained copy of a file that was being
+replaced. Preserve that directory for diagnosis if automatic recovery reports
+that its journal or backups are damaged.
+
 With `failOpen: false`, any update failure stops the launch. With
 `failOpen: true`, startup may continue only if the complete previous
 installation can be verified.

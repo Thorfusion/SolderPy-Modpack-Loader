@@ -12,15 +12,12 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -28,8 +25,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 final class Installer {
     private static final char[] HEX = "0123456789abcdef".toCharArray();
@@ -104,11 +99,11 @@ final class Installer {
         InstalledState previous,
         InstalledState next) throws LoaderException {
 
-        Path transaction = dataDirectory.resolve("staging-" + UUID.randomUUID().toString());
+        Path transaction = InstallTransaction.create(dataDirectory);
         Path content = transaction.resolve("content");
         Path downloadDirectory = transaction.resolve("downloads");
         Path packagesDirectory = transaction.resolve("packages");
-        Path backup = transaction.resolve("backup");
+        boolean commitStarted = false;
         try {
             Files.createDirectories(content);
             Map<String, String> desiredOwners = new LinkedHashMap<String, String>();
@@ -227,7 +222,10 @@ final class Installer {
 
             next.receipts = receipts;
             progress.phase("Committing modpack update...");
-            commit(stagedPaths, removals, content, backup, next);
+            commitStarted = true;
+            InstallTransaction.commit(
+                gameDirectory, dataDirectory, loaderJar, transaction, content,
+                stagedPaths, removals, next);
             downloads.pruneCache(selected);
         } catch (UnrecoverableBootstrapException e) {
             throw e;
@@ -238,7 +236,9 @@ final class Installer {
         } catch (IOException e) {
             throw new RecoverableBootstrapException("Could not stage the modpack update", e);
         } finally {
-            deleteTreeQuietly(transaction);
+            if (!commitStarted) {
+                InstallTransaction.discard(transaction);
+            }
         }
     }
 
@@ -580,99 +580,6 @@ final class Installer {
         }
     }
 
-    private void commit(
-        Set<String> stagedPaths,
-        Set<String> removals,
-        Path content,
-        Path backup,
-        InstalledState next) throws LoaderException {
-
-        Set<String> affected = new LinkedHashSet<String>();
-        affected.addAll(removals);
-        affected.addAll(stagedPaths);
-        Map<String, Path> backups = new LinkedHashMap<String, Path>();
-        List<Path> installed = new ArrayList<Path>();
-        Set<Path> preparedDirectories = new HashSet<Path>();
-
-        try {
-            for (String relative : affected) {
-                PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
-                Path target = PathSafety.resolve(gameDirectory, relative);
-                if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-                    if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
-                        throw new LoaderException("Owned output is not a regular file: " + target);
-                    }
-                    Path saved = PathSafety.resolve(backup, relative);
-                    createParentDirectories(saved, preparedDirectories);
-                    move(target, saved);
-                    backups.put(relative, saved);
-                }
-            }
-
-            for (String relative : stagedPaths) {
-                Path source = PathSafety.resolve(content, relative);
-                Path target = PathSafety.resolve(gameDirectory, relative);
-                PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
-                createParentDirectories(target, preparedDirectories);
-                move(source, target);
-                installed.add(target);
-            }
-
-            next.save(dataDirectory);
-        } catch (Exception failure) {
-            try {
-                rollback(installed, backups);
-            } catch (LoaderException rollbackFailure) {
-                UnrecoverableBootstrapException unrecoverable =
-                    new UnrecoverableBootstrapException(
-                        "Update failed and rollback was incomplete", rollbackFailure);
-                unrecoverable.addSuppressed(failure);
-                throw unrecoverable;
-            }
-            throw new RecoverableBootstrapException(
-                "Could not commit the modpack update; previous files were restored", failure);
-        }
-    }
-
-    private static void createParentDirectories(Path file, Set<Path> preparedDirectories)
-        throws IOException {
-
-        Path parent = file.getParent();
-        if (parent != null && preparedDirectories.add(parent)) {
-            Files.createDirectories(parent);
-        }
-    }
-
-    private void rollback(List<Path> installed, Map<String, Path> backups) throws LoaderException {
-        IOException rollbackFailure = null;
-        Collections.reverse(installed);
-        for (Path file : installed) {
-            try {
-                Files.deleteIfExists(file);
-            } catch (IOException e) {
-                rollbackFailure = e;
-            }
-        }
-        List<Map.Entry<String, Path>> entries = new ArrayList<Map.Entry<String, Path>>(backups.entrySet());
-        Collections.reverse(entries);
-        for (Map.Entry<String, Path> entry : entries) {
-            try {
-                Path destination = PathSafety.resolve(gameDirectory, entry.getKey());
-                Files.createDirectories(destination.getParent());
-                move(entry.getValue(), destination);
-            } catch (Exception e) {
-                if (e instanceof IOException) {
-                    rollbackFailure = (IOException) e;
-                } else {
-                    rollbackFailure = new IOException(e);
-                }
-            }
-        }
-        if (rollbackFailure != null) {
-            throw new LoaderException("Update failed and rollback was incomplete", rollbackFailure);
-        }
-    }
-
     private static void move(Path source, Path destination) throws IOException {
         try {
             Files.move(source, destination, StandardCopyOption.ATOMIC_MOVE,
@@ -732,19 +639,4 @@ final class Installer {
         }
     }
 
-    private static void deleteTreeQuietly(Path root) {
-        if (root == null || !Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
-            return;
-        }
-        try (Stream<Path> paths = Files.walk(root)) {
-            List<Path> ordered = paths.sorted(Comparator.reverseOrder()).collect(Collectors.toList());
-            for (Path path : ordered) {
-                try {
-                    Files.deleteIfExists(path);
-                } catch (IOException ignored) {
-                }
-            }
-        } catch (IOException ignored) {
-        }
-    }
 }
