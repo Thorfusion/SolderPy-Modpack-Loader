@@ -12,11 +12,13 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -245,14 +247,106 @@ class InstallerTest {
         launcher.bootstrapManaged = false;
         launcher.installOwner = "launcher";
 
+        InstalledState cached = new InstalledState();
         new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
             new LoaderConfig.Limits()).reconcile(
                 Collections.<BootstrapManifest.Package>emptyList(),
                 Collections.singletonList(launcher), new InstalledState(),
-                new InstalledState(), false);
+                cached, false);
 
         assertTrue(Files.isRegularFile(renamedNativeMod));
         assertTrue(Files.isRegularFile(userMod));
+        assertEquals("mods/a-completely-different-name.jar",
+            cached.launcherFileMetadata.get(launcher.download.md5).path);
+
+        Path movedNativeMod = mods.resolve("renamed-again.jar");
+        Files.move(renamedNativeMod, movedNativeMod);
+        InstalledState refreshed = new InstalledState();
+        new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits()).reconcile(
+                Collections.<BootstrapManifest.Package>emptyList(),
+                Collections.singletonList(launcher), cached, refreshed, false);
+
+        assertEquals("mods/renamed-again.jar",
+            refreshed.launcherFileMetadata.get(launcher.download.md5).path);
+        assertTrue(Files.isRegularFile(userMod));
+    }
+
+    @Test
+    void launcherMetadataCacheCanBeReplacedByAlwaysHashVerification() throws Exception {
+        Path mod = gameDirectory.resolve("mods/native.jar");
+        Files.createDirectories(mod.getParent());
+        byte[] expected = "expected launcher bytes".getBytes(StandardCharsets.UTF_8);
+        Files.write(mod, expected);
+
+        BootstrapManifest.Package launcher = jarPackage(
+            "native-mod", "2.0", "mods/provider-name.jar", md5(expected));
+        launcher.prettyName = "Native Mod";
+        launcher.membershipId = 7L;
+        launcher.bootstrapManaged = false;
+        launcher.installOwner = "launcher";
+        InstalledState cached = new InstalledState();
+
+        new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits()).reconcile(
+                Collections.<BootstrapManifest.Package>emptyList(),
+                Collections.singletonList(launcher), new InstalledState(), cached, false);
+
+        InstalledState.FileMetadata metadata =
+            cached.launcherFileMetadata.get(launcher.download.md5);
+        Files.write(mod, new byte[expected.length]);
+        Files.setLastModifiedTime(mod,
+            FileTime.from(metadata.lastModifiedNanos, TimeUnit.NANOSECONDS));
+
+        new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits()).reconcile(
+                Collections.<BootstrapManifest.Package>emptyList(),
+                Collections.singletonList(launcher), cached, new InstalledState(), false);
+
+        RecoverableBootstrapException error = assertThrows(
+            RecoverableBootstrapException.class, () ->
+                new Installer(gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+                    new LoaderConfig.Limits(), true).reconcile(
+                        Collections.<BootstrapManifest.Package>emptyList(),
+                        Collections.singletonList(launcher), cached,
+                        new InstalledState(), false));
+        assertTrue(error.getMessage().contains("Missing or wrong version"));
+    }
+
+    @Test
+    void loaderOwnedMetadataCacheCanBeReplacedByAlwaysHashVerification() throws Exception {
+        Path mod = gameDirectory.resolve("mods/managed.jar");
+        Files.createDirectories(mod.getParent());
+        byte[] expected = "expected managed bytes".getBytes(StandardCharsets.UTF_8);
+        Files.write(mod, expected);
+
+        BootstrapManifest.Package managed = jarPackage(
+            "managed", "1.0", "mods/managed.jar", md5(expected));
+        Map<String, String> hashes = new LinkedHashMap<String, String>();
+        hashes.put("mods/managed.jar", md5(expected));
+        InstalledState state = new InstalledState();
+        state.receipts.put("managed", new InstalledState.Receipt(
+            "managed", "1.0", managed.download.md5, "jar:mods/managed.jar",
+            Collections.singletonList("mods/managed.jar"), hashes));
+
+        Installer cachedInstaller = new Installer(
+            gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits());
+        assertTrue(cachedInstaller.isInstalledStateIntact(
+            Collections.singletonList(managed), state));
+        InstalledState.FileMetadata metadata = state.receipts.get("managed")
+            .fileMetadata.get("mods/managed.jar");
+
+        Files.write(mod, new byte[expected.length]);
+        Files.setLastModifiedTime(mod,
+            FileTime.from(metadata.lastModifiedNanos, TimeUnit.NANOSECONDS));
+
+        assertTrue(cachedInstaller.isInstalledStateIntact(
+            Collections.singletonList(managed), state));
+        assertFalse(new Installer(
+            gameDirectory, gameDirectory.resolve(".solderpy-loader"),
+            new LoaderConfig.Limits(), true).isInstalledStateIntact(
+                Collections.singletonList(managed), state));
     }
 
     @Test

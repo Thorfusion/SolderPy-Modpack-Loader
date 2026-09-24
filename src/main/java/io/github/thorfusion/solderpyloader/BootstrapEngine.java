@@ -77,9 +77,11 @@ final class BootstrapEngine {
                 plan.manifest, plan.requestedMemberships);
 
             progress.beginPreparation("Checking installed modpack content...");
+            boolean alwaysHashFiles =
+                plan.manifest.requiresFullHashing(config.alwaysHashFiles);
             Installer installer = new Installer(
                 paths.gameDirectory(), paths.dataDirectory(), config.limits,
-                paths.loaderJar(), progress);
+                paths.loaderJar(), progress, alwaysHashFiles);
             installer.reconcile(
                 plan.selected, plan.manifest.packages, previous, next,
                 plan.manifest.removesUnlistedModFiles());

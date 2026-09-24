@@ -47,10 +47,19 @@ final class BootstrapManifest {
 
     static final class UpdatePolicy {
         @SerializedName("remove_unlisted_mod_files") boolean removeUnlistedModFiles;
+        @SerializedName("always_hash_files") boolean alwaysHashFiles;
     }
 
     boolean removesUnlistedModFiles() {
         return updatePolicy != null && updatePolicy.removeUnlistedModFiles;
+    }
+
+    boolean alwaysHashesFiles() {
+        return updatePolicy != null && updatePolicy.alwaysHashFiles;
+    }
+
+    boolean requiresFullHashing(boolean locallyRequested) {
+        return locallyRequested || alwaysHashesFiles();
     }
 
     static final class SelectionPolicy {

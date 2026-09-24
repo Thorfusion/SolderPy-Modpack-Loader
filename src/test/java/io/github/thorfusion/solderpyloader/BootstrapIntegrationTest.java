@@ -173,15 +173,22 @@ class BootstrapIntegrationTest {
     }
 
     @Test
-    void defaultsModCleanupOffAndReadsTheNewUpdatePolicy() {
+    void defaultsUpdatePoliciesOffAndReadsApiRequirements() {
         BootstrapManifest older = JsonSupport.GSON.fromJson(
             "{}", BootstrapManifest.class);
         BootstrapManifest strict = JsonSupport.GSON.fromJson(
-            "{\"update_policy\":{\"remove_unlisted_mod_files\":true}}",
+            "{\"update_policy\":{" +
+                "\"remove_unlisted_mod_files\":true," +
+                "\"always_hash_files\":true}}",
             BootstrapManifest.class);
 
         assertFalse(older.removesUnlistedModFiles());
+        assertFalse(older.alwaysHashesFiles());
+        assertFalse(older.requiresFullHashing(false));
+        assertTrue(older.requiresFullHashing(true));
         assertTrue(strict.removesUnlistedModFiles());
+        assertTrue(strict.alwaysHashesFiles());
+        assertTrue(strict.requiresFullHashing(false));
     }
 
     private static BootstrapManifest manifest(int port, byte[] jarBytes) throws Exception {

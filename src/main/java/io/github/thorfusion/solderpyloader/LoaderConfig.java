@@ -40,6 +40,7 @@ final class LoaderConfig {
     String bootstrapJava;
     Integer bootstrapJavaMajor = DEFAULT_BOOTSTRAP_JAVA_MAJOR;
     boolean failOpen;
+    boolean alwaysHashFiles;
     ManifestVerification manifestVerification;
     @SerializedName("selections") JsonElement legacySelections;
     Limits limits = new Limits();

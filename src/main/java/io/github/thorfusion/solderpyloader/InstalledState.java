@@ -32,7 +32,24 @@ final class InstalledState {
     JsonObject signedManifest;
     List<Long> selectedMemberships;
     List<RememberedSelection> selectedOptions;
+    Map<String, FileMetadata> launcherFileMetadata =
+        new LinkedHashMap<String, FileMetadata>();
     Map<String, Receipt> receipts = new LinkedHashMap<String, Receipt>();
+
+    static final class FileMetadata {
+        String path;
+        long size;
+        long lastModifiedNanos;
+
+        FileMetadata() {
+        }
+
+        FileMetadata(String path, long size, long lastModifiedNanos) {
+            this.path = path;
+            this.size = size;
+            this.lastModifiedNanos = lastModifiedNanos;
+        }
+    }
 
     static final class RememberedSelection {
         String groupKey;
@@ -54,6 +71,8 @@ final class InstalledState {
         String installKey;
         List<String> files = new ArrayList<String>();
         Map<String, String> hashes = new LinkedHashMap<String, String>();
+        Map<String, FileMetadata> fileMetadata =
+            new LinkedHashMap<String, FileMetadata>();
 
         Receipt() {
         }
@@ -65,12 +84,19 @@ final class InstalledState {
 
         Receipt(String slug, String version, String md5, String installKey, List<String> files,
                 Map<String, String> hashes) {
+            this(slug, version, md5, installKey, files, hashes,
+                new LinkedHashMap<String, FileMetadata>());
+        }
+
+        Receipt(String slug, String version, String md5, String installKey, List<String> files,
+                Map<String, String> hashes, Map<String, FileMetadata> fileMetadata) {
             this.slug = slug;
             this.version = version;
             this.md5 = md5;
             this.installKey = installKey;
             this.files = new ArrayList<String>(files);
             this.hashes = new LinkedHashMap<String, String>(hashes);
+            this.fileMetadata = new LinkedHashMap<String, FileMetadata>(fileMetadata);
         }
     }
 
@@ -87,9 +113,17 @@ final class InstalledState {
             if (state.receipts == null) {
                 state.receipts = new LinkedHashMap<String, Receipt>();
             }
+            if (state.launcherFileMetadata == null) {
+                state.launcherFileMetadata =
+                    new LinkedHashMap<String, FileMetadata>();
+            }
             for (Receipt receipt : state.receipts.values()) {
                 if (receipt != null && receipt.hashes == null) {
                     receipt.hashes = new LinkedHashMap<String, String>();
+                }
+                if (receipt != null && receipt.fileMetadata == null) {
+                    receipt.fileMetadata =
+                        new LinkedHashMap<String, FileMetadata>();
                 }
             }
             return state;

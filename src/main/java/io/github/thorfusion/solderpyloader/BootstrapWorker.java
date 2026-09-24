@@ -124,7 +124,9 @@ public final class BootstrapWorker {
             List<BootstrapManifest.Package> selected =
                 SelectionResolver.resolve(manifest, state.selectedMemberships);
             Installer installer = new Installer(
-                paths.gameDirectory(), paths.dataDirectory(), config.limits, paths.loaderJar());
+                paths.gameDirectory(), paths.dataDirectory(), config.limits,
+                paths.loaderJar(),
+                manifest.requiresFullHashing(config.alwaysHashFiles));
             return installer.isInstalledStateIntact(selected, manifest.packages, state);
         } catch (Throwable verificationFailure) {
             LoaderLog.warn(

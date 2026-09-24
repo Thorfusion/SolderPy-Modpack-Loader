@@ -35,6 +35,7 @@ class LoaderConfigTest {
         assertEquals(4, config.limits.maxConcurrentDownloads);
         assertEquals(1, config.limits.maxConcurrentExtractions);
         assertTrue(config.enabled);
+        assertFalse(config.alwaysHashFiles);
     }
 
     @Test
@@ -48,6 +49,18 @@ class LoaderConfigTest {
 
         assertEquals("solder", config.source);
         assertEquals("modrinth", config.platform);
+    }
+
+    @Test
+    void acceptsAlwaysHashFilesOverride() throws Exception {
+        Path configFile = temporary.resolve("always-hash.json");
+        Files.write(configFile, ("{\"api\":\"https://example.com/api/\"," +
+            "\"modpack\":\"pack\",\"alwaysHashFiles\":true}")
+            .getBytes(StandardCharsets.UTF_8));
+
+        LoaderConfig config = LoaderConfig.load(configFile);
+
+        assertTrue(config.alwaysHashFiles);
     }
 
     @Test

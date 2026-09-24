@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -46,13 +47,35 @@ final class Installer {
     private final int concurrentDownloads;
     private final int concurrentExtractions;
     private final BootstrapProgress progress;
+    private final boolean alwaysHashFiles;
 
     Installer(Path gameDirectory, Path dataDirectory, LoaderConfig.Limits limits) {
-        this(gameDirectory, dataDirectory, limits, null, BootstrapProgress.console());
+        this(gameDirectory, dataDirectory, limits, null, BootstrapProgress.console(), false);
+    }
+
+    Installer(
+        Path gameDirectory,
+        Path dataDirectory,
+        LoaderConfig.Limits limits,
+        boolean alwaysHashFiles) {
+
+        this(gameDirectory, dataDirectory, limits, null, BootstrapProgress.console(),
+            alwaysHashFiles);
     }
 
     Installer(Path gameDirectory, Path dataDirectory, LoaderConfig.Limits limits, Path loaderJar) {
-        this(gameDirectory, dataDirectory, limits, loaderJar, BootstrapProgress.console());
+        this(gameDirectory, dataDirectory, limits, loaderJar, BootstrapProgress.console(), false);
+    }
+
+    Installer(
+        Path gameDirectory,
+        Path dataDirectory,
+        LoaderConfig.Limits limits,
+        Path loaderJar,
+        boolean alwaysHashFiles) {
+
+        this(gameDirectory, dataDirectory, limits, loaderJar, BootstrapProgress.console(),
+            alwaysHashFiles);
     }
 
     Installer(
@@ -61,6 +84,17 @@ final class Installer {
         LoaderConfig.Limits limits,
         Path loaderJar,
         BootstrapProgress progress) {
+
+        this(gameDirectory, dataDirectory, limits, loaderJar, progress, false);
+    }
+
+    Installer(
+        Path gameDirectory,
+        Path dataDirectory,
+        LoaderConfig.Limits limits,
+        Path loaderJar,
+        BootstrapProgress progress,
+        boolean alwaysHashFiles) {
 
         this.gameDirectory = gameDirectory.toAbsolutePath().normalize();
         this.dataDirectory = dataDirectory.toAbsolutePath().normalize();
@@ -71,6 +105,7 @@ final class Installer {
         this.concurrentDownloads = limits.maxConcurrentDownloads;
         this.concurrentExtractions = limits.maxConcurrentExtractions;
         this.progress = progress;
+        this.alwaysHashFiles = alwaysHashFiles;
     }
 
     boolean isInstalledStateIntact(
@@ -87,7 +122,7 @@ final class Installer {
         if (state.receipts.size() != selected.size()) {
             return false;
         }
-        verifyLauncherOwnedFiles(allPackages);
+        verifyLauncherOwnedFiles(allPackages, state, state);
         for (BootstrapManifest.Package item : selected) {
             if (!isReusable(item, state.receipts.get(item.name))) {
                 return false;
@@ -138,7 +173,7 @@ final class Installer {
                     externallyOwnedPackages.add(item.name);
                 }
             }
-            verifyLauncherOwnedFiles(allPackages);
+            verifyLauncherOwnedFiles(allPackages, previous, next);
             Set<String> reusablePackages = new LinkedHashSet<String>();
             List<BootstrapManifest.Package> pendingDownloads =
                 new ArrayList<BootstrapManifest.Package>();
@@ -196,6 +231,8 @@ final class Installer {
                 }
                 List<String> normalizedFiles = new ArrayList<String>();
                 Map<String, String> hashes = new LinkedHashMap<String, String>();
+                Map<String, InstalledState.FileMetadata> fileMetadata =
+                    new LinkedHashMap<String, InstalledState.FileMetadata>();
                 for (String relative : files) {
                     String normalized = PathSafety.normalizeRelative(relative, false);
                     validateOutput(normalized);
@@ -209,6 +246,11 @@ final class Installer {
                     normalizedFiles.add(normalized);
                     if (reusable) {
                         hashes.put(normalized, oldReceipt.hashes.get(normalized));
+                        InstalledState.FileMetadata metadata =
+                            oldReceipt.fileMetadata.get(normalized);
+                        if (metadata != null) {
+                            fileMetadata.put(normalized, metadata);
+                        }
                     } else {
                         StagedPackage staged = stagedPackages.get(item.name);
                         String stagedHash = staged.hashes.get(normalized);
@@ -219,8 +261,13 @@ final class Installer {
                         Path source = PathSafety.resolve(staged.root, normalized);
                         hashes.put(normalized, stagedHash.toLowerCase(Locale.ROOT));
                         if (matchesExistingFile(normalized, stagedHash)) {
+                            Path existing = PathSafety.resolve(gameDirectory, normalized);
+                            fileMetadata.put(normalized,
+                                readFileMetadata(normalized, existing));
                             Files.deleteIfExists(source);
                         } else {
+                            fileMetadata.put(normalized,
+                                readFileMetadata(normalized, source));
                             stagedPaths.add(normalized);
                         }
                     }
@@ -230,7 +277,7 @@ final class Installer {
                 }
                 receipts.put(item.name, new InstalledState.Receipt(
                     item.name, item.version, item.download.md5.toLowerCase(Locale.ROOT),
-                    installKey(item), normalizedFiles, hashes));
+                    installKey(item), normalizedFiles, hashes, fileMetadata));
             }
 
             Set<String> removals = new LinkedHashSet<String>();
@@ -400,7 +447,9 @@ final class Installer {
     }
 
     private void verifyLauncherOwnedFiles(
-        List<BootstrapManifest.Package> allPackages) throws LoaderException {
+        List<BootstrapManifest.Package> allPackages,
+        InstalledState previous,
+        InstalledState next) throws LoaderException {
 
         Map<String, List<BootstrapManifest.Package>> missing =
             new LinkedHashMap<String, List<BootstrapManifest.Package>>();
@@ -423,12 +472,60 @@ final class Installer {
             packages.add(item);
         }
         if (missing.isEmpty()) {
+            next.launcherFileMetadata =
+                new LinkedHashMap<String, InstalledState.FileMetadata>();
             return;
         }
 
         progress.phase("Verifying launcher-installed mods...");
+        Map<String, InstalledState.FileMetadata> verified =
+            new LinkedHashMap<String, InstalledState.FileMetadata>();
+        Map<String, InstalledState.FileMetadata> cached =
+            previous == null || previous.launcherFileMetadata == null
+                ? Collections.<String, InstalledState.FileMetadata>emptyMap()
+                : previous.launcherFileMetadata;
+        Set<String> inspectedPaths = new LinkedHashSet<String>();
+        int metadataHits = 0;
+        int hashedFiles = 0;
+
+        for (String expectedHash : new ArrayList<String>(missing.keySet())) {
+            InstalledState.FileMetadata metadata = cached.get(expectedHash);
+            if (metadata == null || metadata.path == null) {
+                continue;
+            }
+            try {
+                String relative = PathSafety.normalizeRelative(metadata.path, false);
+                String collision = PathSafety.collisionKey(relative);
+                if (!collision.startsWith("mods/")) {
+                    continue;
+                }
+                PathSafety.rejectSymlinkAncestors(gameDirectory, relative);
+                Path file = PathSafety.resolve(gameDirectory, relative);
+                if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) ||
+                    Files.isSymbolicLink(file)) {
+                    continue;
+                }
+                if (!alwaysHashFiles && matchesFileMetadata(relative, file, metadata)) {
+                    inspectedPaths.add(collision);
+                    missing.remove(expectedHash);
+                    verified.put(expectedHash, readFileMetadata(relative, file));
+                    metadataHits++;
+                    continue;
+                }
+                String actualHash = md5(file);
+                hashedFiles++;
+                inspectedPaths.add(collision);
+                if (missing.remove(actualHash) != null) {
+                    verified.put(actualHash, readFileMetadata(relative, file));
+                }
+            } catch (LoaderException | RuntimeException staleMetadata) {
+                LoaderLog.warn(
+                    "Ignoring stale launcher-owned file metadata for hash " + expectedHash);
+            }
+        }
+
         Path mods = gameDirectory.resolve("mods");
-        if (Files.exists(mods, LinkOption.NOFOLLOW_LINKS)) {
+        if (!missing.isEmpty() && Files.exists(mods, LinkOption.NOFOLLOW_LINKS)) {
             if (Files.isSymbolicLink(mods) ||
                 !Files.isDirectory(mods, LinkOption.NOFOLLOW_LINKS)) {
                 throw new LoaderException(
@@ -441,7 +538,16 @@ final class Installer {
                     Path file = iterator.next();
                     if (Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) &&
                         !Files.isSymbolicLink(file)) {
-                        missing.remove(md5(file));
+                        String relative = PathSafety.normalizeRelative(
+                            gameDirectory.relativize(file).toString().replace('\\', '/'), false);
+                        if (!inspectedPaths.add(PathSafety.collisionKey(relative))) {
+                            continue;
+                        }
+                        String actualHash = md5(file);
+                        hashedFiles++;
+                        if (missing.remove(actualHash) != null) {
+                            verified.put(actualHash, readFileMetadata(relative, file));
+                        }
                     }
                 }
             } catch (LoaderException e) {
@@ -464,8 +570,10 @@ final class Installer {
                 String.join(", ", identities) + ". Repair or reinstall the modpack in " +
                 "the launcher, then try again.");
         }
+        next.launcherFileMetadata = verified;
         LoaderLog.info("Verified " + launcherPackageCount(allPackages) +
-            " launcher-owned package(s) by MD5");
+            " launcher-owned package(s): " + metadataHits +
+            " metadata cache hit(s), " + hashedFiles + " file hash(es) calculated");
     }
 
     private static int launcherPackageCount(
@@ -640,6 +748,10 @@ final class Installer {
             return false;
         }
         boolean inspectOutputs = forceOutputInspection || item.enforcesOnLaunch();
+        if (receipt.fileMetadata == null) {
+            receipt.fileMetadata =
+                new LinkedHashMap<String, InstalledState.FileMetadata>();
+        }
         for (String value : receipt.files) {
             String relative = PathSafety.normalizeRelative(value, false);
             validateOutput(relative);
@@ -655,11 +767,48 @@ final class Installer {
             if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
                 return false;
             }
+            InstalledState.FileMetadata metadata = receipt.fileMetadata.get(relative);
+            if (!alwaysHashFiles && matchesFileMetadata(relative, file, metadata)) {
+                continue;
+            }
             if (!expectedHash.equalsIgnoreCase(md5(file))) {
                 return false;
             }
+            receipt.fileMetadata.put(relative, readFileMetadata(relative, file));
         }
         return true;
+    }
+
+    private static boolean matchesFileMetadata(
+        String relative, Path file, InstalledState.FileMetadata expected)
+        throws LoaderException {
+
+        if (expected == null || expected.path == null ||
+            !relative.equals(expected.path)) {
+            return false;
+        }
+        InstalledState.FileMetadata actual = readFileMetadata(relative, file);
+        return actual.size == expected.size &&
+            actual.lastModifiedNanos == expected.lastModifiedNanos;
+    }
+
+    private static InstalledState.FileMetadata readFileMetadata(
+        String relative, Path file) throws LoaderException {
+
+        try {
+            BasicFileAttributes attributes = Files.readAttributes(
+                file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (!attributes.isRegularFile() || Files.isSymbolicLink(file)) {
+                throw new LoaderException("Managed output is not a safe regular file: " + file);
+            }
+            return new InstalledState.FileMetadata(
+                relative, attributes.size(),
+                attributes.lastModifiedTime().to(TimeUnit.NANOSECONDS));
+        } catch (LoaderException e) {
+            throw e;
+        } catch (IOException | RuntimeException e) {
+            throw new LoaderException("Could not inspect file metadata: " + file, e);
+        }
     }
 
     private void validateOutput(String relative) throws LoaderException {

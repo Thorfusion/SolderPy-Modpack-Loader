@@ -135,6 +135,7 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
   "bootstrapJava": null,
   "bootstrapJavaMajor": 25,
   "failOpen": false,
+  "alwaysHashFiles": false,
   "limits": {
     "maxDownloadBytes": 536870912,
     "maxExpandedBytes": 2147483648,
@@ -159,7 +160,8 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
 | `clientId` | `null` | Non-secret Solder client UUID (`cid`) for a private pack |
 | `bootstrapJava` | `null` | Java home or executable used only by the bootstrap worker |
 | `bootstrapJavaMajor` | `25` | Preferred automatically detected worker Java major |
-| `failOpen` | `false` | Allows launch after an update failure only when the previous installation is complete and hash-verified |
+| `failOpen` | `false` | Allows launch after an update failure only when the previous installation passes the configured integrity checks |
+| `alwaysHashFiles` | `false` | Locally disables the file-metadata fast path and recalculates MD5 whenever an enforced Loader-owned or launcher-owned file is checked; the signed API can also require this |
 | `limits` | Shown above | Resource ceilings and download/extraction concurrency |
 
 Solder API keys are deliberately not accepted in the local configuration.
@@ -198,10 +200,12 @@ inference. Do not copy these build-local IDs between builds. `null` uses server
 inference, while `[]` explicitly makes every non-ignored package Loader-owned.
 Technic normally uses server-owned inference: its normal required packages can
 remain launcher-owned while SolderPy Modpack Loader manages optional and advanced
-content. File names are never used to recognize launcher-owned mods. Strict
-cleanup and normal launches compare file contents with the raw-JAR MD5 values
-already supplied by the signed bootstrap manifest, so the same bytes are
-recognized even when different launchers use different names. Every expected
+content. Provider file names are never used to recognize launcher-owned mods.
+The first verification locates them by the raw-JAR MD5 values supplied by the
+signed bootstrap manifest and records their actual local paths. Later launches
+reuse an entry when that path, size, and last-modified time are unchanged; a
+move or metadata change falls back to MD5 and refreshes the local record. Set
+`alwaysHashFiles` to `true` to bypass this optimization. Every expected
 launcher-owned package must be present under `mods/`; a missing or wrong version
 stops launch with an error asking the user to repair or reinstall the pack in
 their launcher. Extra user files remain allowed unless strict cleanup is active.
@@ -354,9 +358,11 @@ verified, and staged successfully.
 ### Existing files, repairs, and user-added files
 
 SolderPy Modpack Loader records only the paths it owns, together with their installed
-MD5 values, in `.solderpy-loader/state.json`. It checks every selected managed
-file against that receipt on later launches. It does not wipe or generally
-clean the `mods`, `config`, `resourcepacks`, or other game directories.
+MD5 values and local file metadata, in `.solderpy-loader/state.json`. Later
+launches normally accept an unchanged path, size, and last-modified time; if
+any value changes, the Loader calculates MD5 before deciding whether to repair
+the file. It does not wipe or generally clean the `mods`, `config`,
+`resourcepacks`, or other game directories.
 
 | File situation | SolderPy Modpack Loader behavior |
 | --- | --- |
@@ -373,6 +379,14 @@ clean the `mods`, `config`, `resourcepacks`, or other game directories.
 | A launcher-owned package is present under any filename with the expected raw-JAR MD5 | Accepts it without downloading a duplicate. |
 | A launcher-owned package is missing or has different contents | Stops launch and names the affected package; no live files are changed. |
 | Two selected managed packages claim the same output path | Stops the update with an error instead of choosing one package or silently overwriting the other. |
+
+The metadata fast path avoids rereading hundreds of megabytes on every launch.
+It is intended to detect ordinary edits, replacements, moves, and launcher
+updates. A local program can deliberately change bytes while restoring both
+the old size and timestamp; use local `alwaysHashFiles: true`, or enable the
+signed API policy `update_policy.always_hash_files`, when every verification
+must read and hash file contents instead of trusting unchanged metadata. Either
+true value forces hashing: a local setting cannot disable an API requirement.
 
 The table describes the default behavior when
 `update_policy.remove_unlisted_mod_files` is false. When the API sets it to
@@ -430,8 +444,9 @@ Deleting `.solderpy-loader/cache/downloads` is safe when a manual cache reset is
 needed, but forces affected content to be downloaded again.
 
 Each installed package receipt records its version, artifact MD5, install
-location, output paths, and installed file hashes. The repair and preservation
-rules are described in the preceding section.
+location, output paths, installed file hashes, sizes, and modification times.
+Launcher-owned hash discoveries are cached in the same state file. The repair
+and preservation rules are described in the preceding section.
 
 Updates are staged away from the live instance and committed only after all
 required work succeeds. Before changing any live path, the loader writes a
