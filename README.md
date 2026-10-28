@@ -13,6 +13,13 @@
 5. If the mod has been linked to its CurseForge project, solder.py resolves the corresponding CurseForge modpack format.
 6. When the mod is updated through Modrinth, solder.py keeps one version record that can be exported in the native formats for Modrinth and CurseForge while remaining available through Technic.
 
+## SolderPy Modpack Loader downloads:
+
++ [Github](https://github.com/Thorfusion/SolderPy-Modpack-Loader/releases)
++ [Curseforge]([https://github.com/Thorfusion/solder.py/blob/dev/docs/bootstrap-api.md](https://www.curseforge.com/minecraft/mc-mods/solderpy-loader)).
++ [Modrinth]([https://github.com/Thorfusion/solder.py/blob/dev/docs/bootstrap-api.md](https://modrinth.com/mod/solderpy-loader)).
+
+
 ### Where SolderPy Modpack Loader comes in
 
 Modrinth, CurseForge, and Technic all have different distribution capabilities and limitations. Native platform downloads are used whenever possible, while SolderPy Modpack Loader handles content and features that the platforms cannot provide consistently:
