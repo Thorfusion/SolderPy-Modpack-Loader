@@ -16,8 +16,8 @@
 ## SolderPy Modpack Loader downloads:
 
 + [Github](https://github.com/Thorfusion/SolderPy-Modpack-Loader/releases)
-+ [Curseforge]([https://github.com/Thorfusion/solder.py/blob/dev/docs/bootstrap-api.md](https://www.curseforge.com/minecraft/mc-mods/solderpy-loader))
-+ [Modrinth]([https://github.com/Thorfusion/solder.py/blob/dev/docs/bootstrap-api.md](https://modrinth.com/mod/solderpy-loader))
++ [Curseforge]((https://www.curseforge.com/minecraft/mc-mods/solderpy-loader))
++ [Modrinth]((https://modrinth.com/mod/solderpy-loader))
 
 
 ### Where SolderPy Modpack Loader comes in
