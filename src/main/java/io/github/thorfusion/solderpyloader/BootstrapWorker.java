@@ -108,18 +108,14 @@ public final class BootstrapWorker {
         }
     }
 
-    private static boolean hasIntactPreviousInstall(RuntimePaths paths, LoaderConfig config) {
+    static boolean hasIntactPreviousInstall(RuntimePaths paths, LoaderConfig config) {
         try {
             InstalledState state = InstalledState.load(paths.dataDirectory());
-            if (!state.matches(config) || state.manifest == null ||
-                state.signedManifest == null || state.selectedMemberships == null) {
+            if (!state.matches(config) || state.manifest == null || state.selectedMemberships == null) {
                 return false;
             }
-            ManifestVerifier.verify(
-                state.signedManifest, config.manifestVerification);
-            BootstrapManifest manifest = JsonSupport.GSON.fromJson(
-                state.signedManifest, BootstrapManifest.class);
-            manifest.validate(config.modpack, config.target, config.source);
+            BootstrapManifest manifest = LoaderDistribution.manifestSource(paths, config)
+                .previousManifest(state);
             manifest.applyConfiguredOwnership(config.launcherOwnedMemberships);
             List<BootstrapManifest.Package> selected =
                 SelectionResolver.resolve(manifest, state.selectedMemberships);

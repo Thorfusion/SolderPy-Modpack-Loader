@@ -1,7 +1,5 @@
 package io.github.thorfusion.solderpyloader;
 
-import com.google.gson.JsonObject;
-
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
@@ -57,10 +55,11 @@ final class BootstrapEngine {
             boolean samePack = previous.matches(config);
 
             progress.beginPreparation("Loading modpack information...");
-            UpdatePlan plan = prepareUpdate(previous, samePack, progress);
-
             InstalledState next = new InstalledState();
+            UpdatePlan plan = prepareUpdate(previous, next, samePack, progress);
+
             next.api = config.api;
+            next.manifestFile = config.manifestFile;
             next.modpack = config.modpack;
             next.target = config.target;
             next.source = config.source;
@@ -69,9 +68,7 @@ final class BootstrapEngine {
                 ? null : new ArrayList<Long>(config.launcherOwnedMemberships);
             next.build = plan.manifest.build.version;
             next.manifestHash = plan.manifest.manifestHash;
-            next.etag = plan.etag;
             next.manifest = plan.manifest;
-            next.signedManifest = plan.signedManifest.deepCopy();
             next.selectedMemberships = new ArrayList<Long>(plan.requestedMemberships);
             next.selectedOptions = rememberedSelections(
                 plan.manifest, plan.requestedMemberships);
@@ -101,53 +98,14 @@ final class BootstrapEngine {
     }
 
     private UpdatePlan prepareUpdate(
-        InstalledState previous, boolean samePack, BootstrapProgress progress)
+        InstalledState previous, InstalledState next, boolean samePack, BootstrapProgress progress)
         throws LoaderException {
 
         try {
-            BootstrapClient client = new BootstrapClient(config);
-            client.verifyCapability();
-            BootstrapManifest cachedManifest = null;
-            JsonObject cachedSignedManifest = null;
-            if (samePack && previous.signedManifest != null) {
-                try {
-                    ManifestVerifier.verify(
-                        previous.signedManifest, config.manifestVerification);
-                    cachedManifest = JsonSupport.GSON.fromJson(
-                        previous.signedManifest, BootstrapManifest.class);
-                    cachedManifest.validate(config.modpack, config.target, config.source);
-                    cachedSignedManifest = previous.signedManifest;
-                } catch (LoaderException | RuntimeException error) {
-                    LoaderLog.warn(
-                        "The cached manifest signature is invalid; requesting a complete manifest");
-                    cachedManifest = null;
-                    cachedSignedManifest = null;
-                }
-            }
-            BootstrapClient.ManifestResponse response = client.fetchManifest(
-                samePack ? previous.build : null,
-                cachedSignedManifest == null ? null : previous.etag);
-
-            BootstrapManifest manifest;
-            JsonObject signedManifest;
-            String etag;
-            boolean manifestUnchanged;
-            if (response.notModified) {
-                if (cachedManifest == null || cachedSignedManifest == null) {
-                    throw new LoaderException(
-                        "Server returned 304 but no verified cached manifest is available");
-                }
-                manifest = cachedManifest;
-                signedManifest = cachedSignedManifest;
-                etag = previous.etag;
-                manifestUnchanged = true;
-            } else {
-                manifest = response.manifest;
-                signedManifest = response.signedManifest;
-                etag = response.etag;
-                manifestUnchanged = samePack && sameManifest(previous, manifest);
-                LoaderLog.info("Resolved " + manifest.modpack.name + " build " + manifest.build.version);
-            }
+            ManifestSource client = LoaderDistribution.manifestSource(paths, config);
+            BootstrapManifest manifest = client.load(previous, next, samePack);
+            boolean manifestUnchanged = samePack && sameManifest(previous, manifest);
+            LoaderLog.info("Resolved " + manifest.modpack.name + " build " + manifest.build.version);
             manifest.applyConfiguredOwnership(config.launcherOwnedMemberships);
 
             boolean clientSide = "client".equals(config.target);
@@ -170,13 +128,12 @@ final class BootstrapEngine {
                         manifest, requestedMemberships, progress.ownerWindow());
                     progress.beginPreparation("Applying optional selections...");
                 } else {
-                    LoaderLog.warn("A graphical environment is unavailable; using saved choices and API defaults");
+                    LoaderLog.warn("A graphical environment is unavailable; using saved choices and manifest defaults");
                 }
             }
             List<BootstrapManifest.Package> selected =
                 SelectionResolver.resolve(manifest, requestedMemberships);
-            return new UpdatePlan(
-                manifest, signedManifest, etag, requestedMemberships, selected);
+            return new UpdatePlan(manifest, requestedMemberships, selected);
         } catch (LaunchCancelledException e) {
             throw e;
         } catch (RecoverableBootstrapException e) {
@@ -246,10 +203,10 @@ final class BootstrapEngine {
             SelectionResolver.resolve(manifest, initial);
             return initial;
         } catch (LoaderException e) {
-            LoaderLog.warn("Saved optional choices no longer satisfy the API rules; using API defaults");
+            LoaderLog.warn("Saved optional choices no longer satisfy the manifest rules; using manifest defaults");
             return new LinkedHashSet<Long>(manifest.selectionPolicy.defaultMemberships);
         } catch (RuntimeException e) {
-            LoaderLog.warn("Saved optional choices are invalid; using API defaults");
+            LoaderLog.warn("Saved optional choices are invalid; using manifest defaults");
             return new LinkedHashSet<Long>(manifest.selectionPolicy.defaultMemberships);
         }
     }
@@ -342,21 +299,15 @@ final class BootstrapEngine {
 
     private static final class UpdatePlan {
         private final BootstrapManifest manifest;
-        private final JsonObject signedManifest;
-        private final String etag;
         private final Collection<Long> requestedMemberships;
         private final List<BootstrapManifest.Package> selected;
 
         private UpdatePlan(
             BootstrapManifest manifest,
-            JsonObject signedManifest,
-            String etag,
             Collection<Long> requestedMemberships,
             List<BootstrapManifest.Package> selected) {
 
             this.manifest = manifest;
-            this.signedManifest = signedManifest;
-            this.etag = etag;
             this.requestedMemberships = new ArrayList<Long>(requestedMemberships);
             this.selected = selected;
         }

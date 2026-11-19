@@ -182,6 +182,9 @@ final class Installer {
                 !previous.build.equals(next.build);
             progress.beginInstalledCheck(selected);
             for (BootstrapManifest.Package item : selected) {
+                if ("jar".equals(item.download.format)) {
+                    validateOutput(PathSafety.normalizeRelative(item.download.path, false));
+                }
                 progress.checking(item);
                 InstalledState.Receipt oldReceipt = previous.receipts.get(item.name);
                 boolean reusable = isReusable(item, oldReceipt, strictModCleanup);
@@ -814,7 +817,7 @@ final class Installer {
     private void validateOutput(String relative) throws LoaderException {
         Path output = PathSafety.resolve(gameDirectory, relative);
         if (output.startsWith(dataDirectory) || output.equals(loaderJar) ||
-            "config/solderpy-loader.json".equals(PathSafety.collisionKey(relative))) {
+            PathSafety.isLoaderConfiguration(relative)) {
             throw new LoaderException("Package attempts to modify a reserved loader path: " + relative);
         }
     }

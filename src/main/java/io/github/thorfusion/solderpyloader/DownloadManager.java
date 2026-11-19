@@ -224,7 +224,7 @@ final class DownloadManager {
             connection.setConnectTimeout(CONNECT_TIMEOUT_MILLIS);
             connection.setReadTimeout(READ_TIMEOUT_MILLIS);
             connection.setRequestMethod("GET");
-            connection.setRequestProperty("User-Agent", "solderpy-loader/0.3.2");
+            connection.setRequestProperty("User-Agent", "solderpy-loader/0.3.3");
             connection.setRequestProperty("Accept", "application/octet-stream");
             connection.setRequestProperty("Accept-Encoding", "identity");
             if (resumed > 0) {

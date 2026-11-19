@@ -186,7 +186,7 @@ final class OptionalSelectionScreen {
             root.add(createScrollPane(choices), BorderLayout.CENTER);
         }
 
-        JButton restore = new JButton("Restore API Defaults");
+        JButton restore = new JButton("Restore Pack Defaults");
         restore.addActionListener(event -> restoreDefaults());
         JButton cancel = new JButton("Cancel Launch");
         cancel.addActionListener(event -> dialog.dispose());

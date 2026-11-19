@@ -1,3 +1,6 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+import org.gradle.authentication.http.BasicAuthentication
+
 plugins {
     id 'java'
     id 'maven-publish'
@@ -17,6 +20,12 @@ repositories {
 
 configurations {
     legacyCompatibilityTest
+}
+
+sourceSets {
+    fileOnly {
+        compileClasspath = sourceSets.main.output + configurations.compileClasspath
+    }
 }
 
 dependencies {
@@ -64,7 +73,8 @@ jar {
             'Can-Redefine-Classes': 'false',
             'Can-Retransform-Classes': 'false',
             'Implementation-Title': 'SolderPy Modpack Loader',
-            'Implementation-Version': project.version
+            'Implementation-Version': project.version,
+            'SolderPy-Distribution': 'universal'
         )
     }
 
@@ -73,9 +83,8 @@ jar {
     }
 }
 
-shadowJar {
+tasks.withType(ShadowJar).configureEach {
     archiveBaseName = 'solderpy-loader'
-    archiveClassifier = ''
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
     relocate 'com.google.gson', 'io.github.thorfusion.solderpyloader.internal.gson'
@@ -89,6 +98,40 @@ shadowJar {
     from('THIRD-PARTY-NOTICES.md') {
         into 'META-INF'
     }
+}
+
+shadowJar {
+    archiveClassifier = ''
+}
+
+tasks.register('fileOnlyJar', ShadowJar) {
+    group = 'build'
+    description = 'Builds the file-only distribution for CurseForge and Modrinth.'
+    archiveClassifier = 'file-only'
+    configurations = [project.configurations.runtimeClasspath]
+    from(sourceSets.main.output) {
+        exclude 'io/github/thorfusion/solderpyloader/LoaderDistribution.class'
+        exclude 'io/github/thorfusion/solderpyloader/BootstrapClient*.class'
+        exclude 'io/github/thorfusion/solderpyloader/ManifestVerifier*.class'
+    }
+    from sourceSets.fileOnly.output
+    manifest {
+        attributes(tasks.named('jar').get().manifest.attributes + [
+            'SolderPy-Distribution': 'file-only'
+        ])
+    }
+}
+
+tasks.register('fileOnlyArtifactSmokeTest', JavaExec) {
+    dependsOn tasks.named('fileOnlyJar'), tasks.named('testClasses')
+    group = 'verification'
+    description = 'Verifies the packaged file-only loader installs local manifests and rejects the API.'
+    classpath = files(
+        sourceSets.test.output,
+        tasks.named('fileOnlyJar').flatMap { it.archiveFile }
+    )
+    mainClass = 'io.github.thorfusion.solderpyloader.FileOnlyArtifactProbe'
+    systemProperty 'java.awt.headless', 'true'
 }
 
 tasks.register('legacyClasspathSmokeTest', JavaExec) {
@@ -105,32 +148,35 @@ tasks.register('legacyClasspathSmokeTest', JavaExec) {
 
 tasks.named('check') {
     dependsOn tasks.named('legacyClasspathSmokeTest')
+    dependsOn tasks.named('fileOnlyArtifactSmokeTest')
 }
 
 tasks.named('build') {
     dependsOn tasks.named('shadowJar')
+    dependsOn tasks.named('fileOnlyJar')
 }
 
 publishing {
     publications {
         mavenJava(MavenPublication) {
             artifact tasks.named('shadowJar')
+            artifact tasks.named('fileOnlyJar')
             artifactId = 'solderpy-loader'
 
             pom {
                 name = 'SolderPy Modpack Loader'
                 description = 'Cross-loader Minecraft modpack bootstrap agent for solder.py modpacks'
-                url = 'https://github.com/Thorfusion/solderpy_loader'
+                url = 'https://github.com/Thorfusion/SolderPy-Modpack-Loader'
                 licenses {
                     license {
                         name = 'All Rights Reserved'
-                        url = 'https://github.com/Thorfusion/solderpy_loader/blob/main/LICENSE'
+                        url = 'https://github.com/Thorfusion/SolderPy-Modpack-Loader/blob/main/LICENSE'
                     }
                 }
                 scm {
-                    connection = 'scm:git:https://github.com/Thorfusion/solderpy_loader.git'
-                    developerConnection = 'scm:git:ssh://git@github.com/Thorfusion/solderpy_loader.git'
-                    url = 'https://github.com/Thorfusion/solderpy_loader'
+                    connection = 'scm:git:https://github.com/Thorfusion/SolderPy-Modpack-Loader.git'
+                    developerConnection = 'scm:git:ssh://git@github.com/Thorfusion/SolderPy-Modpack-Loader.git'
+                    url = 'https://github.com/Thorfusion/SolderPy-Modpack-Loader'
                 }
             }
         }
@@ -150,12 +196,23 @@ publishing {
                 }
                 def normalized = baseUrl.trim().replaceAll('/+$', '')
                 if (repositoryName != null && !repositoryName.trim().isEmpty()) {
-                    normalized += '/' + repositoryName.trim().replaceAll('^/+', '')
+                    normalized += '/' + repositoryName.trim().replaceAll('^/+|/+$', '')
+                }
+                def tokenName = System.getenv('MAVEN_USERNAME')
+                def tokenSecret = System.getenv('MAVEN_PASSWORD')
+                if (tokenName == null || tokenName.trim().isEmpty() ||
+                    tokenSecret == null || tokenSecret.isEmpty()) {
+                    throw new GradleException(
+                        'MAVEN_USERNAME and MAVEN_PASSWORD must contain the Reposilite token name and secret'
+                    )
                 }
                 url = uri(normalized)
                 credentials {
-                    username = System.getenv('MAVEN_USERNAME') ?: ''
-                    password = System.getenv('MAVEN_PASSWORD') ?: ''
+                    username = tokenName
+                    password = tokenSecret
+                }
+                authentication {
+                    basic(BasicAuthentication)
                 }
             }
         }

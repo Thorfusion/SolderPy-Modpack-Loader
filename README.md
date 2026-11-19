@@ -27,15 +27,15 @@ Modrinth, CurseForge, and Technic all have different distribution capabilities a
 - Rich optional-content selection for players.
 - Distribution of configuration files, custom mods, resource packs, and other pack-specific content without publishing each item as a separate Modrinth or CurseForge project.
 - Server installation and updating.
-- Delivery of content managed through Maven or GitHub integrations.
+- Delivery of content managed through GitHub integrations.
 - Consumption of builds maintained through solder.py's write API.
 
 This approach lets solder.py remain the single source of truth while each platform uses its native download system wherever possible.
 
-SolderPy Modpack Loader is a loader-neutral Minecraft bootstrap mod for the
-[solder.py bootstrap API](https://github.com/Thorfusion/solder.py/blob/dev/docs/bootstrap-api.md).
-It updates a pack before mod discovery, presents API-defined optional content,
-and works on both clients and dedicated servers.
+SolderPy Modpack Loader is a loader-neutral Minecraft bootstrap mod. It reads
+either the signed [solder.py bootstrap API](https://github.com/Thorfusion/solder.py/blob/dev/docs/bootstrap-api.md)
+or a local manifest shipped with a pack. It prepares files before mod discovery,
+presents manifest-defined optional content, and works on clients and dedicated servers.
 
 The loader uses [Relauncher](https://github.com/juanmuscaria/relauncher) to
 perform one controlled JVM restart with SolderPy Modpack Loader attached as a Java
@@ -50,8 +50,7 @@ the instance.
 ## Why use it?
 
 - One solder.py build can serve clients, dedicated servers, and Technic packs.
-- Basic and advanced optional content is defined by the API, not duplicated in
-  a local configuration file.
+- Basic and advanced optional content is defined by the selected manifest source.
 - Changed packages are downloaded concurrently, verified, staged, and committed
   as one recoverable update.
 - Available disk space is checked before network downloads and again before
@@ -75,7 +74,7 @@ pack builds:
    supported launch paths.
 5. Let SolderPy Modpack Loader deliver pack-specific content that native manifests
    cannot express consistently, including interactive optionals, configuration,
-   resource packs, custom content, Maven/GitHub-managed files, and server
+   resource packs, custom content, GitHub-managed files, and server
    installation.
 
 This avoids maintaining three unrelated modpack manifests while still using
@@ -111,13 +110,107 @@ SolderPy Modpack Loader does not bundle Relauncher or its native libraries. Its 
 runtime dependencies are shaded and relocated inside the release JAR.
 
 For upgrade compatibility, existing technical identifiers retain the original
-`solderpy-loader` slug: release JAR names, the Maven artifact ID,
+`solderpy-loader` slug: release JAR names,
 `config/solderpy-loader.json`, `.solderpy-loader/`, Java package names, and the
 HTTP user agent. The displayed product name is SolderPy Modpack Loader.
 
 ## Configuration
 
-Create `config/solderpy-loader.json` inside the Minecraft instance:
+Both distributions use `config/solderpy-loader.json` inside the Minecraft instance:
+
+| Release JAR | Manifest sources | Publication |
+| --- | --- | --- |
+| `solderpy-loader-<version>.jar` | Signed webserver API or local file | GitHub |
+| `solderpy-loader-<version>-file-only.jar` | Local file only; API client, response handling, URL setup, and signature-verification code omitted | CurseForge, Modrinth, and GitHub |
+
+Configure exactly one of `api`, `manifest`, or `manifestFile`. There is no automatic
+fallback between sources. The ownership setting `source` (`hybrid` or `solder`)
+retains its existing meaning and does not choose the manifest source.
+
+### Local file mode
+
+For a single-file setup, embed the bootstrap manifest directly in the configuration:
+
+```json
+{
+  "enabled": true,
+  "modpack": "example-pack",
+  "target": "auto",
+  "source": "hybrid",
+  "manifest": {
+    "schema": "solder.py/bootstrap",
+    "schema_version": 1,
+    "modpack": { "slug": "example-pack", "name": "Example Pack" },
+    "build": { "version": "1.0.0" },
+    "target": "client",
+    "source": "hybrid",
+    "optional_mode": { "name": "basic" },
+    "selection_policy": {
+      "required_memberships": [1],
+      "default_memberships": [1]
+    },
+    "groups": [],
+    "packages": [
+      {
+        "membership_id": 1,
+        "name": "example-mod",
+        "version": "1.0.0",
+        "install_owner": "loader",
+        "selection": { "state": 0 },
+        "download": {
+          "url": "https://downloads.example.com/example-mod-1.0.0.jar",
+          "md5": "<actual 32-character MD5 of the downloaded file>",
+          "filesize": 12345,
+          "format": "jar",
+          "path": "mods/example-mod-1.0.0.jar"
+        }
+      }
+    ]
+  }
+}
+```
+
+Replace the illustrative URL, hash, size, and package details with real values.
+The inline `manifest` has the same schema as an API bootstrap response, including
+advanced optional groups, dependencies, ownership, update policies, and ordered
+download sources. ZIP packages use `format: "solder_zip"` and `extract_to` instead
+of the JAR output `path`. The manifest's `build.version` is authoritative in file
+mode; the configuration's API build channel is unused.
+
+Alternatively, move that exact `manifest` object to
+`config/solderpy-loader/manifest.json` and replace the configuration's `manifest`
+field with:
+
+```json
+"manifestFile": "config/solderpy-loader/manifest.json"
+```
+
+Paths are relative to the instance directory and must stay inside the protected
+`config/solderpy-loader/` directory. URLs, absolute paths, traversal outside that
+directory, and symbolic links are rejected. Packages cannot replace the loader
+configuration or local manifest directory. For separate client and server
+manifests, use `config/solderpy-loader/{target}.json`; `{target}` is replaced after
+side detection. Each manifest must match its resolved side, modpack, and ownership
+source. The client example above intentionally fails on a server; ship a matching
+server manifest when distributing a server pack.
+
+Local manifests are loaded from the pack on every launch. No discovery request,
+manifest request, or API fallback is made. Only the listed artifacts are downloaded,
+using the existing HTTPS, hash, size, extraction, and transaction checks. Updating
+the download list requires distributing an updated local pack file. The loader
+hashes the actual manifest content, so edits are detected even if its declared
+`manifest_hash` or build version stays unchanged.
+
+Local manifests trust the pack files distributed by the launcher and do not
+require `manifestVerification`. The universal JAR also supports a verification
+key for signed local manifests. The file-only JAR omits the signature verifier
+and rejects `manifestVerification` and `clientId` settings. File-mode
+`failOpen` rechecks the current local manifest and installed outputs; it never
+trusts a cached manifest in place of a missing, invalid, or changed local file.
+
+### Webserver API mode
+
+Use the universal JAR with the existing configuration:
 
 ```json
 {
@@ -156,14 +249,16 @@ Create `config/solderpy-loader.json` inside the Minecraft instance:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `enabled` | `true` | Enables the bootstrap relaunch and update |
-| `api` | Required | Absolute solder.py URL ending in `/api/` |
+| `api` | Required in API mode | Absolute solder.py URL ending in `/api/`; mutually exclusive with local manifest fields |
+| `manifest` | `null` | Inline local bootstrap manifest; works in both distributions |
+| `manifestFile` | `null` | Instance-relative local manifest path under `config/solderpy-loader/`; works in both distributions |
 | `modpack` | Required | Solder modpack slug |
 | `build` | `recommended` | Build name or Solder recommendation channel |
 | `target` | `auto` | Uses Relauncher side detection; `client` and `server` are explicit overrides |
 | `source` | `hybrid` | Controls package ownership: `hybrid` lets the native platform own exact supported files, while `solder` keeps ordinary build packages Loader-owned |
 | `platform` | `null` | `modrinth`, `curseforge`, `prism`, or `technic` when the platform already owns some files |
 | `launcherOwnedMemberships` | `null` | Exact build membership IDs installed by a generated native export; `[]` explicitly means none |
-| `manifestVerification` | Required at launch | Public ECDSA verification key pinned by the generated export; never contains the server's private key |
+| `manifestVerification` | Required in API mode; optional locally in the universal JAR | Public ECDSA verification key pinned by the generated export; rejected by the file-only JAR |
 | `clientId` | `null` | Non-secret Solder client UUID (`cid`) for a private pack |
 | `bootstrapJava` | `null` | Java home or executable used only by the bootstrap worker |
 | `bootstrapJavaMajor` | `25` | Preferred automatically detected worker Java major |
@@ -185,11 +280,11 @@ downloads and one extraction at a time are conservative defaults for slower
 SSDs; faster storage can use a manual override.
 
 Do not add a `selections` field. Optional definitions, rules, and defaults are
-authoritative API data, and the legacy local field is rejected.
+authoritative manifest data, and the legacy `selections` field is rejected in both modes.
 
 For every Loader-owned raw JAR, both source modes follow the API's ordered
 artifact sources: a configured per-version override, a saved provider URL such
-as Modrinth or Maven, and the Solder-hosted artifact as the final fallback.
+as Modrinth, and the Solder-hosted artifact as the final fallback.
 `source: "solder"` means the native platform does not own ordinary build
 packages; it does not force their bytes to come only from Solder hosting.
 `source: "hybrid"` lets the native platform install exact supported matches
@@ -226,25 +321,27 @@ provided by the bootstrap manifest:
 
 - Basic and ungrouped options use checkboxes.
 - Advanced single-choice groups use radio buttons.
-- Advanced multiple-choice groups use checkboxes with API-defined limits.
+- Advanced multiple-choice groups use checkboxes with manifest-defined limits.
 - Basic options are split into pages of at most six entries, and every page is
   scrollable.
 - Long package and group descriptions open in bounded, scrollable detail
   dialogs.
 
-Closing the screen or choosing **Cancel Launch** stops startup. **Restore API
+Closing the screen or choosing **Cancel Launch** stops startup. **Restore Pack
 Defaults** resets the choices currently shown to the manifest defaults.
 
 After a successful install, selected memberships and their stable group-key /
 package-slug identities are stored in `.solderpy-loader/state.json`. An
 unchanged manifest reuses them without opening the screen again. When a cloned
 or updated build changes database membership IDs, existing options still retain
-their saved choices; new options start from the current API defaults. Required
+their saved choices; new options start from the current manifest defaults. Required
 memberships and dependency closure are always enforced.
 
-Dedicated servers do not open a GUI. They request the server manifest, use the
-API defaults, and install only `SERVER` and `BOTH` packages. A headless
-client reuses compatible saved choices where possible and otherwise uses API
+Dedicated servers do not open a GUI. They load the server manifest, use its
+defaults, and install the packages listed in that server manifest. API manifests
+include only `SERVER` and `BOTH` packages; local manifests must also be prepared
+for the intended side. A headless client reuses compatible saved choices where
+possible and otherwise uses manifest
 defaults.
 
 ## Download and installation behavior
@@ -255,8 +352,9 @@ shown before manifest resolution and remains open behind the optional-content
 selector. After the player continues, the same window immediately shows the
 installed-file check instead of leaving an unexplained blank interval:
 
-1. Discover signed-bootstrap support, verify the complete manifest against the
-   public key pinned by the export, then resolve optional memberships.
+1. Read the local manifest, or discover signed-bootstrap support and verify the
+   API response against the public key pinned by the export, then resolve optional
+   memberships.
 2. Hash-check launcher-owned packages and Loader-owned enforced outputs, then
    preflight the disk space required for missing cached artifacts.
 3. Download up to four changed packages concurrently by default. The progress
@@ -295,7 +393,7 @@ margin. Therefore no live modpack file is changed when either space check
 fails. An optional expanded-size field in the API could move this second check
 ahead of downloading, but it is not required for safe behavior.
 
-Every successful bootstrap response must contain a `SHA256withECDSA` signature
+Every successful API bootstrap response must contain a `SHA256withECDSA` signature
 whose key ID matches `manifestVerification`. The loader reproduces solder.py's
 canonical JSON encoding and authenticates the entire response except the
 detached `signature` object, including unknown additive fields and the optional
@@ -534,7 +632,7 @@ selection.
   reports `bootstrap_managed: false`, preventing the loader from replacing
   its own active JAR.
 - Keep optional packages, groups, defaults, dependency rules, and descriptions
-  in the bootstrap API.
+  in the selected bootstrap manifest source.
 - Use `target: "auto"` unless a launcher cannot report its side. Unknown
   automatic detection fails with an actionable error instead of installing
   files for the wrong side.
@@ -546,7 +644,7 @@ selection.
 The build uses a JDK 25 toolchain but emits Java 8-compatible bytecode:
 
 ```text
-./gradlew clean check shadowJar
+./gradlew clean check shadowJar fileOnlyJar
 ```
 
 The dependency-contained release JAR is written to `build/libs/`. Embedded
@@ -555,12 +653,27 @@ Minecraft cannot override them. The `-thin.jar` is not a release artifact;
 Relauncher Core remains compile-only because the universal Relauncher JAR
 provides its SPI at runtime.
 
+`check` also runs the packaged file-only JAR in isolation, verifies that API
+configuration is refused and the API client class is absent, and exercises both
+inline and separate-file manifests. Both shaded distributions are attached to
+GitHub releases; only `-file-only.jar` is uploaded to
+CurseForge and Modrinth.
+
 Published releases target:
 
 - Modrinth project `5LpwENAj`
 - CurseForge project `1702825`
 
 A GitHub prerelease is published to both platforms as a beta release.
+
+## Other downloader mods
+
+Downloader mods are hosted on these platforms:
+[File Director on CurseForge](https://www.curseforge.com/minecraft/mc-mods/filedirector)
+and [Modrinth](https://modrinth.com/mod/filedirector) advertises URL downloads;
+[MCInstance Loader on CurseForge](https://www.curseforge.com/minecraft/mc-mods/mcinstance-loader)
+also advertises arbitrary URL downloads. File Director even documents
+[remote configuration fetching](https://github.com/TerraFirmaCraft-The-Final-Frontier/FileDirector/wiki/Config-Type:-Remote).
 
 ## License
 

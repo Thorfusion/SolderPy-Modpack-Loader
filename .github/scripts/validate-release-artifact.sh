@@ -2,8 +2,13 @@
 
 set -euo pipefail
 
-artifact="${1:?usage: validate-release-artifact.sh <jar> [expected-version]}"
+artifact="${1:?usage: validate-release-artifact.sh <jar> [expected-version] [universal|file-only]}"
 expected_version="${2:-}"
+expected_distribution="${3:-universal}"
+if [[ "$expected_distribution" != 'universal' && "$expected_distribution" != 'file-only' ]]; then
+    echo "Unknown distribution: $expected_distribution" >&2
+    exit 1
+fi
 
 if [[ ! -f "$artifact" ]]; then
     echo "Expected artifact is missing: $artifact" >&2
@@ -32,6 +37,9 @@ require_entry() {
 
 require_entry 'io/github/thorfusion/solderpyloader/SolderPyAgent.class'
 require_entry 'io/github/thorfusion/solderpyloader/BootstrapWorker.class'
+require_entry 'io/github/thorfusion/solderpyloader/LoaderDistribution.class'
+require_entry 'io/github/thorfusion/solderpyloader/LocalManifestClient.class'
+require_entry 'io/github/thorfusion/solderpyloader/ManifestSource.class'
 require_entry 'io/github/thorfusion/solderpyloader/SolderPyRelaunchProvider.class'
 require_entry 'io/github/thorfusion/solderpyloader/SolderPyJavaRuntimeProvider.class'
 require_entry 'assets/solderpyloader/icon.png'
@@ -43,6 +51,16 @@ require_entry 'io/github/thorfusion/solderpyloader/internal/io/IOUtils.class'
 require_entry 'META-INF/LICENSE'
 require_entry 'META-INF/LICENSE.txt'
 require_entry 'META-INF/THIRD-PARTY-NOTICES.md'
+
+if [[ "$expected_distribution" == 'file-only' ]]; then
+    if grep -Eq '^io/github/thorfusion/solderpyloader/(BootstrapClient|ManifestVerifier)(\$[^/]*)?\.class$' "$listing"; then
+        echo 'The file-only distribution must not contain the API client or signature verifier.' >&2
+        exit 1
+    fi
+else
+    require_entry 'io/github/thorfusion/solderpyloader/BootstrapClient.class'
+    require_entry 'io/github/thorfusion/solderpyloader/ManifestVerifier.class'
+fi
 
 if grep -Eq '^(com/google/gson|org/apache/commons/(compress|io))/' "$listing"; then
     echo 'Embedded dependencies must be relocated away from Minecraft libraries.' >&2
@@ -72,6 +90,12 @@ if [[ -n "$expected_version" ]] &&
     ! tr -d '\r' < "$scratch/META-INF/MANIFEST.MF" |
         grep -Fqx "Implementation-Version: $expected_version"; then
     echo "Manifest version does not match $expected_version." >&2
+    exit 1
+fi
+
+if ! tr -d '\r' < "$scratch/META-INF/MANIFEST.MF" |
+    grep -Fqx "SolderPy-Distribution: $expected_distribution"; then
+    echo "Manifest distribution does not match $expected_distribution." >&2
     exit 1
 fi
 

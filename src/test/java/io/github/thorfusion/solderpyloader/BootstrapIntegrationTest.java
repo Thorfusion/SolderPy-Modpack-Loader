@@ -29,6 +29,48 @@ class BootstrapIntegrationTest {
     @TempDir Path gameDirectory;
 
     @Test
+    void apiSourceReverifiesCachedManifestsBeforeUsingNotModifiedResponses() throws Exception {
+        byte[] jarBytes = "fixture".getBytes(StandardCharsets.UTF_8);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        KeyPair signingKey = ManifestSigningTestSupport.keyPair();
+        BootstrapManifest original = manifest(server.getAddress().getPort(), jarBytes);
+        FixtureHandler fixture = new FixtureHandler(jarBytes, ManifestSigningTestSupport.jsonBytes(
+            ManifestSigningTestSupport.sign(
+                JsonSupport.GSON.toJsonTree(original).getAsJsonObject(), signingKey)));
+        server.createContext("/", fixture);
+        server.start();
+        try {
+            Path configFile = gameDirectory.resolve("loader.json");
+            Files.write(configFile, ("{\"api\":\"http://127.0.0.1:" + server.getAddress().getPort() +
+                "/api/\",\"modpack\":\"pack\",\"target\":\"client\",\"manifestVerification\":" +
+                ManifestSigningTestSupport.configurationJson(signingKey) + "}")
+                .getBytes(StandardCharsets.UTF_8));
+            BootstrapClient client = new BootstrapClient(LoaderConfig.load(configFile));
+            InstalledState first = new InstalledState();
+            BootstrapManifest fetched = client.load(new InstalledState(), first, false);
+            first.build = fetched.build.version;
+            InstalledState second = new InstalledState();
+
+            BootstrapManifest cached = client.load(first, second, true);
+
+            assertEquals(1, fixture.notModifiedResponses.get());
+            assertEquals(fetched.manifestHash, cached.manifestHash);
+            assertEquals(first.etag, second.etag);
+            assertEquals(first.signedManifest, second.signedManifest);
+
+            first.signedManifest.getAsJsonObject("build").addProperty("version", "tampered");
+            InstalledState repaired = new InstalledState();
+            BootstrapManifest refreshed = client.load(first, repaired, true);
+
+            assertEquals("1.0", refreshed.build.version);
+            assertEquals(1, fixture.notModifiedResponses.get());
+            ManifestVerifier.verify(repaired.signedManifest, LoaderConfig.load(configFile).manifestVerification);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void fetchesVerifiesAndCommitsRawJar() throws Exception {
         byte[] jarBytes = "not-a-real-jar-but-verified".getBytes(StandardCharsets.UTF_8);
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -246,6 +288,7 @@ class BootstrapIntegrationTest {
         private final byte[] jar;
         private final byte[] manifest;
         private final AtomicInteger fileRequests = new AtomicInteger();
+        private final AtomicInteger notModifiedResponses = new AtomicInteger();
         private String manifestQuery;
 
         private FixtureHandler(byte[] jar, byte[] manifest) {
@@ -262,6 +305,12 @@ class BootstrapIntegrationTest {
                         "\"bootstrap_signatures\":true,\"bootstrap_schema\":1}}"
                     ).getBytes(StandardCharsets.UTF_8));
             } else if ("/api/modpack/pack/recommended/bootstrap".equals(path)) {
+                if ("\"fixture-etag\"".equals(exchange.getRequestHeaders().getFirst("If-None-Match"))) {
+                    notModifiedResponses.incrementAndGet();
+                    exchange.sendResponseHeaders(304, -1);
+                    exchange.close();
+                    return;
+                }
                 manifestQuery = exchange.getRequestURI().getRawQuery();
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.getResponseHeaders().set("ETag", "\"fixture-etag\"");

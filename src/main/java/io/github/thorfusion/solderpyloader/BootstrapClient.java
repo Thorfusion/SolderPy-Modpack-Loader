@@ -11,11 +11,11 @@ import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
-final class BootstrapClient {
+final class BootstrapClient implements ManifestSource {
     private static final int CONNECT_TIMEOUT_MILLIS = 15_000;
     private static final int READ_TIMEOUT_MILLIS = 30_000;
     private static final int MAX_JSON_BYTES = 16 * 1024 * 1024;
-    private static final String USER_AGENT = "solderpy-loader/0.3.2";
+    private static final String USER_AGENT = "solderpy-loader/0.3.3";
 
     private final LoaderConfig config;
 
@@ -23,7 +23,7 @@ final class BootstrapClient {
         this.config = config;
     }
 
-    void verifyCapability() throws LoaderException {
+    public void verifyCapability() throws LoaderException {
         ManifestVerifier.requireConfigured(config.manifestVerification);
         Response response = get(config.apiUri, null, MAX_JSON_BYTES);
         if (response.status != 200) {
@@ -50,7 +50,7 @@ final class BootstrapClient {
         }
     }
 
-    ManifestResponse fetchManifest(String installedBuild, String etag) throws LoaderException {
+    public ManifestResponse fetchManifest(String installedBuild, String etag) throws LoaderException {
         StringBuilder url = new StringBuilder(config.apiUri.toASCIIString());
         url.append("modpack/").append(encode(config.modpack))
             .append('/').append(encode(config.build)).append("/bootstrap")
@@ -91,6 +91,43 @@ final class BootstrapClient {
         } catch (JsonParseException e) {
             throw new LoaderException("Bootstrap manifest returned invalid JSON", e);
         }
+    }
+
+    @Override
+    public BootstrapManifest load(InstalledState previous, InstalledState next, boolean samePack)
+        throws LoaderException {
+
+        verifyCapability();
+        BootstrapManifest cached = null;
+        if (samePack && previous.signedManifest != null) {
+            try {
+                cached = previousManifest(previous);
+            } catch (LoaderException | RuntimeException error) {
+                LoaderLog.warn("The cached manifest signature is invalid; requesting a complete manifest");
+            }
+        }
+        ManifestResponse response = fetchManifest(
+            samePack ? previous.build : null, cached == null ? null : previous.etag);
+        if (response.notModified) {
+            if (cached == null) {
+                throw new LoaderException("Server returned 304 but no verified cached manifest is available");
+            }
+            next.signedManifest = previous.signedManifest.deepCopy();
+            next.etag = previous.etag;
+            return cached;
+        }
+        next.signedManifest = response.signedManifest.deepCopy();
+        next.etag = response.etag;
+        return response.manifest;
+    }
+
+    @Override
+    public BootstrapManifest previousManifest(InstalledState previous) throws LoaderException {
+        ManifestVerifier.verify(previous.signedManifest, config.manifestVerification);
+        BootstrapManifest manifest = JsonSupport.GSON.fromJson(
+            previous.signedManifest, BootstrapManifest.class);
+        manifest.validate(config.modpack, config.target, config.source);
+        return manifest;
     }
 
     private static Response get(URI uri, String etag, int maxBytes) throws LoaderException {
@@ -167,10 +204,7 @@ final class BootstrapClient {
         final String etag;
 
         private ManifestResponse(
-            boolean notModified,
-            BootstrapManifest manifest,
-            JsonObject signedManifest,
-            String etag) {
+            boolean notModified, BootstrapManifest manifest, JsonObject signedManifest, String etag) {
 
             this.notModified = notModified;
             this.manifest = manifest;

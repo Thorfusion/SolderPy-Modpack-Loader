@@ -484,7 +484,7 @@ final class InstallTransaction {
         Path output = PathSafety.resolve(gameDirectory, normalized);
         if (output.startsWith(dataDirectory) ||
             (loaderJar != null && output.equals(loaderJar)) ||
-            "config/solderpy-loader.json".equals(PathSafety.collisionKey(normalized))) {
+            PathSafety.isLoaderConfiguration(normalized)) {
             throw new LoaderException(
                 "Transaction attempts to modify a reserved loader path: " + relative);
         }

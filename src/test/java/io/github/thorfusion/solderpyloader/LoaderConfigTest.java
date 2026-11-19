@@ -17,6 +17,49 @@ class LoaderConfigTest {
     @TempDir Path temporary;
 
     @Test
+    void acceptsInlineAndExternalManifestsWithoutAnApi() throws Exception {
+        Path file = temporary.resolve("local.json");
+        Files.write(file, "{\"modpack\":\"pack\",\"manifest\":{}}".getBytes(StandardCharsets.UTF_8));
+        LoaderConfig inline = LoaderConfig.load(file);
+        assertTrue(inline.isFileBased());
+        assertEquals(null, inline.apiUri);
+
+        Files.write(file, ("{\"modpack\":\"pack\"," +
+            "\"manifestFile\":\"config\\\\solderpy-loader\\\\{target}.json\"}")
+            .getBytes(StandardCharsets.UTF_8));
+        LoaderConfig external = LoaderConfig.load(file);
+        assertTrue(external.isFileBased());
+        assertEquals("config/solderpy-loader/{target}.json", external.manifestFile);
+    }
+
+    @Test
+    void rejectsAmbiguousOrMissingManifestSources() throws Exception {
+        Path file = temporary.resolve("ambiguous.json");
+        for (String fields : new String[] {
+            "", ",\"api\":\"https://example.com/api/\",\"manifest\":{}",
+            ",\"manifest\":{},\"manifestFile\":\"config/solderpy-loader/manifest.json\"",
+            ",\"api\":\"https://example.com/api/\",\"manifestFile\":\"config/solderpy-loader/manifest.json\""
+        }) {
+            Files.write(file, ("{\"modpack\":\"pack\"" + fields + "}")
+                .getBytes(StandardCharsets.UTF_8));
+            assertThrows(LoaderException.class, () -> LoaderConfig.load(file));
+        }
+    }
+
+    @Test
+    void localManifestPathsMustStayInTheProtectedConfigurationDirectory() throws Exception {
+        Path file = temporary.resolve("unsafe-path.json");
+        for (String path : new String[] {
+            "../manifest.json", "https://example.com/manifest.json", "C:/manifest.json",
+            "/manifest.json", "config/manifest.json", "config/solderpy-loader/../../manifest.json"
+        }) {
+            Files.write(file, ("{\"modpack\":\"pack\",\"manifestFile\":\"" + path + "\"}")
+                .getBytes(StandardCharsets.UTF_8));
+            assertThrows(LoaderException.class, () -> LoaderConfig.load(file));
+        }
+    }
+
+    @Test
     void acceptsLoopbackHttpAndNormalizesApi() throws Exception {
         Path configFile = temporary.resolve("loader.json");
         Files.write(configFile, ("{\n" +

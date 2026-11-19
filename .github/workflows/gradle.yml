@@ -87,9 +87,10 @@ jobs:
           echo "suffix=$build_suffix" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "file=build/libs/solderpy-loader-${version}.jar" >> "$GITHUB_OUTPUT"
+          echo "platform_file=build/libs/solderpy-loader-${version}-file-only.jar" >> "$GITHUB_OUTPUT"
 
       - name: Build and test
-        run: ./gradlew --no-daemon --stacktrace clean check shadowJar
+        run: ./gradlew --no-daemon --stacktrace clean check shadowJar fileOnlyJar
         env:
           BUILD_VER: ${{ steps.artifact.outputs.suffix }}
           JAVA_TOOL_OPTIONS: -Djava.awt.headless=true
@@ -101,7 +102,15 @@ jobs:
           '${{ steps.artifact.outputs.file }}'
           '${{ steps.artifact.outputs.version }}'
 
-      - name: Publish development version to Maven
+      - name: Validate file-only platform artifact
+        shell: bash
+        run: >-
+          bash .github/scripts/validate-release-artifact.sh
+          '${{ steps.artifact.outputs.platform_file }}'
+          '${{ steps.artifact.outputs.version }}'
+          file-only
+
+      - name: Publish both development builds to Reposilite
         if: github.event_name != 'pull_request'
         shell: bash
         env:
@@ -112,8 +121,8 @@ jobs:
           MAVEN_PASSWORD: ${{ secrets.MAVEN_TOKEN }}
           MAVEN_REPO: ${{ secrets.MAVEN_DEVREPO }}
         run: |
-          if [[ -z "$MAVEN_URL" ]]; then
-            echo 'MAVEN_URL is not configured; skipping development Maven publication.'
+          if [[ -z "$MAVEN_URL" || -z "$MAVEN_USERNAME" || -z "$MAVEN_PASSWORD" ]]; then
+            echo 'Reposilite URL or credentials are not configured; skipping development Maven publication.'
             exit 0
           fi
           ./gradlew --no-daemon --no-configuration-cache --stacktrace publish
@@ -122,7 +131,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: solderpy-loader-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.artifact.outputs.file }}
+          path: |
+            ${{ steps.artifact.outputs.file }}
+            ${{ steps.artifact.outputs.platform_file }}
           if-no-files-found: error
           retention-days: 14
           compression-level: 0

@@ -1,6 +1,7 @@
 package io.github.thorfusion.solderpyloader;
 
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.annotations.SerializedName;
 
@@ -30,6 +31,8 @@ final class LoaderConfig {
 
     boolean enabled = true;
     String api;
+    JsonObject manifest;
+    String manifestFile;
     String modpack;
     String build = "recommended";
     String target = "auto";
@@ -100,12 +103,27 @@ final class LoaderConfig {
         if (!enabled) {
             return;
         }
-        requireText(api, "api");
         requireText(modpack, "modpack");
         requireText(build, "build");
         requireText(target, "target");
 
-        api = api.trim();
+        if (api != null) {
+            requireText(api, "api");
+            api = api.trim();
+        }
+        if (manifestFile != null) {
+            requireText(manifestFile, "manifestFile");
+            manifestFile = PathSafety.normalizeRelative(manifestFile.trim(), false);
+            if (!PathSafety.collisionKey(manifestFile).startsWith("config/solderpy-loader/")) {
+                throw new LoaderException("manifestFile must be inside config/solderpy-loader/");
+            }
+        }
+        int sourceCount = (api == null ? 0 : 1) + (manifest == null ? 0 : 1) +
+            (manifestFile == null ? 0 : 1);
+        if (sourceCount != 1) {
+            throw new LoaderException("Configure exactly one of api, manifest, or manifestFile");
+        }
+        LoaderDistribution.validateConfiguration(this);
         modpack = modpack.trim();
         build = build.trim();
         target = target.trim().toLowerCase(Locale.ROOT);
@@ -148,6 +166,9 @@ final class LoaderConfig {
         } else if (clientId != null) {
             clientId = clientId.trim();
         }
+        if (isFileBased() && clientId != null) {
+            throw new LoaderException("clientId is only supported with the webserver API");
+        }
         if (bootstrapJava != null && bootstrapJava.trim().isEmpty()) {
             bootstrapJava = null;
         } else if (bootstrapJava != null) {
@@ -162,10 +183,7 @@ final class LoaderConfig {
         if (legacySelections != null) {
             throw new LoaderException(
                 "The selections configuration field is no longer supported; " +
-                "optional definitions and defaults must be supplied by the bootstrap API");
-        }
-        if (manifestVerification != null) {
-            ManifestVerifier.validateConfiguration(manifestVerification);
+                "optional definitions and defaults must be supplied by the bootstrap manifest");
         }
         if (limits == null) {
             limits = new Limits();
@@ -194,12 +212,10 @@ final class LoaderConfig {
                 MAX_CONCURRENT_EXTRACTIONS);
         }
 
-        try {
-            apiUri = normalizeApiUri(api);
-            api = apiUri.toASCIIString();
-        } catch (IllegalArgumentException e) {
-            throw new LoaderException("Invalid Solder API URL: " + api, e);
-        }
+    }
+
+    boolean isFileBased() {
+        return manifest != null || manifestFile != null;
     }
 
     void resolveTarget(String detectedTarget) throws LoaderException {
@@ -215,38 +231,6 @@ final class LoaderConfig {
                 "set target explicitly in config/solderpy-loader.json");
         }
         target = detected;
-    }
-
-    private static URI normalizeApiUri(String value) {
-        URI uri = URI.create(value.trim());
-        String scheme = uri.getScheme();
-        String host = uri.getHost();
-        if (scheme == null || host == null || uri.getUserInfo() != null ||
-            uri.getQuery() != null || uri.getFragment() != null) {
-            throw new IllegalArgumentException("The API URL must be an absolute URL without credentials, query, or fragment");
-        }
-        boolean loopback = "localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host) ||
-            "::1".equals(host) || "[::1]".equals(host);
-        if (!"https".equalsIgnoreCase(scheme) && !(loopback && "http".equalsIgnoreCase(scheme))) {
-            throw new IllegalArgumentException("HTTPS is required outside loopback development");
-        }
-        String path = uri.getPath();
-        if (path == null || path.isEmpty()) {
-            path = "/api/";
-        } else {
-            if (!path.endsWith("/")) {
-                path += "/";
-            }
-            if (!path.endsWith("/api/")) {
-                throw new IllegalArgumentException("The API URL path must end in /api/");
-            }
-        }
-        try {
-            return new URI(scheme.toLowerCase(Locale.ROOT), null, host,
-                uri.getPort(), path, null, null);
-        } catch (Exception e) {
-            throw new IllegalArgumentException(e);
-        }
     }
 
     private static void requireText(String value, String field) throws LoaderException {

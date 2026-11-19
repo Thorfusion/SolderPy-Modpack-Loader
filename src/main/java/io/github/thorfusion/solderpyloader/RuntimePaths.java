@@ -8,7 +8,7 @@ final class RuntimePaths {
     private final Path gameDirectory;
     private final Path loaderJar;
 
-    private RuntimePaths(Path gameDirectory, Path loaderJar) {
+    RuntimePaths(Path gameDirectory, Path loaderJar) {
         this.gameDirectory = gameDirectory;
         this.loaderJar = loaderJar;
     }

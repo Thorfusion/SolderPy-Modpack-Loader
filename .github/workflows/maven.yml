@@ -12,13 +12,93 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  select-runner:
+    name: Select an available runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+
+    steps:
+      - name: Probe the self-hosted runner
+        id: select
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          PROBE_REF: ${{ github.event.release.tag_name }}
+        run: |
+          fallback='ubuntu-24.04'
+          selected="$fallback"
+          probe_title="Self-hosted runner probe ${PROBE_ID}"
+          probe_run_id=''
+
+          if ! gh workflow run runner-probe.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$PROBE_REF" \
+            --field "probe_id=${PROBE_ID}"; then
+            echo 'Could not dispatch the self-hosted probe; using GitHub-hosted runner.'
+            echo "runner=$selected" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          for _ in {1..15}; do
+            runs_json="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/actions/workflows/runner-probe.yml/runs?event=workflow_dispatch&per_page=20" \
+                2>/dev/null || true
+            )"
+            probe_run_id="$(
+              jq -r --arg title "$probe_title" \
+                '[.workflow_runs[]? | select(.display_title == $title)][0].id // empty' \
+                <<< "$runs_json"
+            )"
+            if [[ -n "$probe_run_id" ]]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ -n "$probe_run_id" ]]; then
+            for _ in {1..15}; do
+              run_json="$(
+                gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}" \
+                  2>/dev/null || true
+              )"
+              status="$(jq -r '.status // ""' <<< "$run_json")"
+              conclusion="$(jq -r '.conclusion // ""' <<< "$run_json")"
+
+              if [[ "$status" == 'completed' ]]; then
+                if [[ "$conclusion" == 'success' ]]; then
+                  selected='self-hosted'
+                fi
+                break
+              fi
+              sleep 2
+            done
+          fi
+
+          if [[ "$selected" == "$fallback" && -n "$probe_run_id" ]]; then
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${probe_run_id}/cancel" \
+              >/dev/null 2>&1 || true
+          fi
+
+          echo "Selected runner: $selected"
+          echo "runner=$selected" >> "$GITHUB_OUTPUT"
+
   build:
-    name: Build, publish Maven, and attach GitHub asset
-    runs-on: self-hosted
+    name: Build both distributions, publish Maven, and attach GitHub assets
+    needs: select-runner
+    runs-on: ${{ needs.select-runner.outputs.runner }}
     timeout-minutes: 30
     environment: release
     outputs:
       artifact_name: ${{ steps.artifact.outputs.name }}
+      platform_artifact_name: ${{ steps.artifact.outputs.platform_name }}
       project_version: ${{ steps.artifact.outputs.version }}
 
     steps:
@@ -56,6 +136,8 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "name=solderpy-loader-${version}.jar" >> "$GITHUB_OUTPUT"
           echo "file=build/libs/solderpy-loader-${version}.jar" >> "$GITHUB_OUTPUT"
+          echo "platform_name=solderpy-loader-${version}-file-only.jar" >> "$GITHUB_OUTPUT"
+          echo "platform_file=build/libs/solderpy-loader-${version}-file-only.jar" >> "$GITHUB_OUTPUT"
 
       - name: Verify tag matches the project version
         shell: bash
@@ -69,7 +151,7 @@ jobs:
           fi
 
       - name: Build and test release
-        run: ./gradlew --no-daemon --stacktrace clean check shadowJar
+        run: ./gradlew --no-daemon --stacktrace clean check shadowJar fileOnlyJar
         env:
           JAVA_TOOL_OPTIONS: -Djava.awt.headless=true
 
@@ -80,7 +162,15 @@ jobs:
           '${{ steps.artifact.outputs.file }}'
           '${{ steps.artifact.outputs.version }}'
 
-      - name: Publish release to Maven
+      - name: Validate file-only platform artifact
+        shell: bash
+        run: >-
+          bash .github/scripts/validate-release-artifact.sh
+          '${{ steps.artifact.outputs.platform_file }}'
+          '${{ steps.artifact.outputs.version }}'
+          file-only
+
+      - name: Publish both builds to Reposilite
         shell: bash
         env:
           MAVEN_PUBLISH: 'true'
@@ -89,10 +179,9 @@ jobs:
           MAVEN_PASSWORD: ${{ secrets.MAVEN_TOKEN }}
           MAVEN_REPO: ${{ secrets.MAVEN_REPO }}
         run: |
-          if [[ -z "$MAVEN_URL" ]]; then
-            echo 'MAVEN_URL is not configured; skipping release Maven publication.'
-            exit 0
-          fi
+          : "${MAVEN_URL:?Configure MAVEN_URL with the Reposilite base or repository URL.}"
+          : "${MAVEN_USERNAME:?Configure MAVEN_USERNAME with the Reposilite token name.}"
+          : "${MAVEN_PASSWORD:?Configure MAVEN_TOKEN with the Reposilite token secret.}"
           ./gradlew --no-daemon --no-configuration-cache --stacktrace publish
 
       - name: Attach artifact to GitHub release
@@ -101,22 +190,26 @@ jobs:
           github-token: ${{ github.token }}
           github-tag: ${{ github.event.release.tag_name }}
           github-generate-changelog: false
-          files: ${{ steps.artifact.outputs.file }}
+          files: |
+            ${{ steps.artifact.outputs.file }}
+            ${{ steps.artifact.outputs.platform_file }}
           version: ${{ steps.artifact.outputs.version }}
 
       - name: Save release artifact for publishing jobs
         uses: actions/upload-artifact@v7
         with:
           name: release-${{ github.event.release.tag_name }}
-          path: ${{ steps.artifact.outputs.file }}
+          path: |
+            ${{ steps.artifact.outputs.file }}
+            ${{ steps.artifact.outputs.platform_file }}
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
 
   publish-modrinth:
     name: Publish Modrinth
-    needs: build
-    runs-on: self-hosted
+    needs: [select-runner, build]
+    runs-on: ${{ needs.select-runner.outputs.runner }}
     timeout-minutes: 30
     environment: release
 
@@ -134,7 +227,7 @@ jobs:
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
           modrinth-dependencies: |
             zCFNaupz(required)
-          files: output/${{ needs.build.outputs.artifact_name }}
+          files: output/${{ needs.build.outputs.platform_artifact_name }}
           name: SolderPy Modpack Loader ${{ needs.build.outputs.project_version }}
           version: ${{ needs.build.outputs.project_version }}
           version-type: ${{ github.event.release.prerelease && 'beta' || 'release' }}
@@ -148,8 +241,8 @@ jobs:
 
   publish-curseforge:
     name: Publish CurseForge
-    needs: build
-    runs-on: self-hosted
+    needs: [select-runner, build]
+    runs-on: ${{ needs.select-runner.outputs.runner }}
     timeout-minutes: 30
     environment: release
 
@@ -168,7 +261,7 @@ jobs:
           # Relauncher's CurseForge project serves its native-free -curseforge edition.
           curseforge-dependencies: |
             1491728(required)
-          files: output/${{ needs.build.outputs.artifact_name }}
+          files: output/${{ needs.build.outputs.platform_artifact_name }}
           name: SolderPy Modpack Loader ${{ needs.build.outputs.project_version }}
           version: ${{ needs.build.outputs.project_version }}
           version-type: ${{ github.event.release.prerelease && 'beta' || 'release' }}

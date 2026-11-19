@@ -20,6 +20,7 @@ import java.util.Objects;
 final class InstalledState {
     int version = 1;
     String api;
+    String manifestFile;
     String modpack;
     String target;
     String source;
@@ -162,7 +163,8 @@ final class InstalledState {
     }
 
     boolean matches(LoaderConfig config) {
-        return config.api.equals(api) && config.modpack.equals(modpack) &&
+        return Objects.equals(config.api, api) &&
+            Objects.equals(config.manifestFile, manifestFile) && config.modpack.equals(modpack) &&
             config.target.equals(target) && Objects.equals(config.source, source) &&
             Objects.equals(config.platform, platform) &&
             Objects.equals(config.launcherOwnedMemberships,

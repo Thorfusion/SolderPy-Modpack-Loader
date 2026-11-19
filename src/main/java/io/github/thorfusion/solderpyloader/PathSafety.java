@@ -76,6 +76,12 @@ final class PathSafety {
         return relative.replace('\\', '/').toLowerCase(Locale.ROOT);
     }
 
+    static boolean isLoaderConfiguration(String relative) {
+        String key = collisionKey(relative);
+        return "config/solderpy-loader.json".equals(key) ||
+            "config/solderpy-loader".equals(key) || key.startsWith("config/solderpy-loader/");
+    }
+
     static void rejectSymlinkAncestors(Path root, String relative) throws LoaderException {
         Path absoluteRoot = root.toAbsolutePath().normalize();
         Path current = absoluteRoot;
